@@ -10,7 +10,7 @@ import {
   type FilePreview,
   type ServerNotificationLevel,
 } from "@openbot/contracts/ipc";
-import { BookMarked, CalendarClock, FileText, Folder, Gauge, Puzzle, Table2, Upload } from "@openbot/ui";
+import { BookMarked, CalendarClock, FileText, Folder, Gauge, Pencil, Puzzle, Table2, Upload } from "@openbot/ui";
 import { SettingsLinkGroup, SettingsLinkRow } from "@openbot/ui/components/SettingsPanel";
 import type { AgentProfile } from "@openbot/ui/data";
 import type { BrowserProfileSelectProfile } from "@openbot/ui/features/browser/BrowserProfileSelect";
@@ -36,6 +36,7 @@ import { createSettingsPanelWidth, saveSettingsPanelWidth } from "../../componen
 import { agentSkillCalls, skillsPort } from "../../skills-port";
 import type { BrowserProfileCalls } from "../browser/browser-profiles-port";
 import { createBrowserProfilesStore } from "../browser/stores/browser-profiles-store";
+import { AgentFileEditor } from "../files/AgentFileEditor";
 import { type AgentFilesOptions, AgentFilesSettings } from "../files/AgentFilesSettings";
 import { createStorageUsage } from "../files/storage-usage";
 import { AgentMemoriesSettings } from "./AgentMemoriesSettings";
@@ -152,6 +153,7 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
     memories: { count: 0, open: false },
     routines: { count: 0, open: false },
     files: { open: false },
+    fileEditor: { open: false },
     instructions: { open: false },
     skills: { count: 0, open: false, reopenAfterMarketplace: false },
   });
@@ -456,7 +458,13 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
       width={panelWidth()}
       onResize={setPanelWidth}
       onResizeEnd={saveSettingsPanelWidth}
-      detailOpen={draft.routines.open || draft.files.open || draft.memories.open || draft.instructions.open}
+      detailOpen={
+        draft.routines.open ||
+        draft.files.open ||
+        draft.memories.open ||
+        draft.instructions.open ||
+        draft.fileEditor.open
+      }
       links={
         <>
           <Show when={sessionSettings()}>
@@ -509,6 +517,17 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
                   onClick={() =>
                     setDraft((state) => {
                       state.skills.open = true;
+                    })
+                  }
+                />
+              </Show>
+              <Show when={!props.remoteClient}>
+                <SettingsLinkRow
+                  icon={<Pencil aria-hidden="true" />}
+                  label={t("agentSettings.links.fileEditor")}
+                  onClick={() =>
+                    setDraft((state) => {
+                      state.fileEditor.open = true;
                     })
                   }
                 />
@@ -654,6 +673,14 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
         onCountChange={(count) =>
           setDraft((state) => {
             state.memories.count = count;
+          })
+        }
+      />
+      <AgentFileEditor
+        open={draft.fileEditor.open}
+        onOpenChange={(open) =>
+          setDraft((state) => {
+            state.fileEditor.open = open;
           })
         }
       />

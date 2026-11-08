@@ -127,6 +127,7 @@ import { AgentStore } from "../backend/agent-store";
 import { BrowserHost } from "../backend/browser-host";
 import { BrowserProfileStore } from "../backend/browser-profiles/browser-profile-store";
 import { BrowserProxyStore } from "../backend/browser-profiles/browser-proxy-store";
+import type { CustomAgentConfig } from "../backend/custom-acp-agents-client";
 import { runCauseEffect } from "../backend/effect-boundary";
 import { MailboxStore } from "../backend/mailbox-store";
 import { McpOAuth } from "../backend/mcp-oauth-provider";
@@ -714,6 +715,8 @@ export interface ApplicationServices {
   customProviders: CustomProviderStore;
   customProviderChanges: CustomProviderChanges;
   customAgentChanges: CustomAgentChanges;
+  /** Each custom agent's decrypted environment. Only `AgentService` and this read path see values. */
+  customAgentEnvironments: () => readonly CustomAgentConfig[];
   acpRegistry: AcpRegistry;
   providerDetection: ProviderDetection;
   providerDetectionSettings: ProviderDetectionSettingsStore;
@@ -2623,6 +2626,8 @@ export async function createApplicationServices({
   browserEgress.on("changed", () => service.notifyBrowserProfilesChanged());
   const customProviderChanges = createCustomProviderChanges({ service, customProviders, providerRuntimes });
   const customAgentChanges = createCustomAgentChanges({ service, customAgents });
+  // The values an ACP agent starts with, so a reader can find which Hermes profile it runs on.
+  const customAgentEnvironments = () => customAgents.configs();
   const acpRegistry = createAcpRegistry({
     directory: app.getPath("userData"),
     customAgentChanges,
@@ -3970,6 +3975,7 @@ export async function createApplicationServices({
     customProviders,
     customProviderChanges,
     customAgentChanges,
+    customAgentEnvironments,
     acpRegistry,
     providerDetection,
     providerDetectionSettings,

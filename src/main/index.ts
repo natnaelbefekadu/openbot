@@ -45,7 +45,6 @@ import {
 } from "./application-services";
 import { type BackgroundTray, createBackgroundTray } from "./background-tray";
 import { removeClaudeCodeSessionEnvironment } from "./claude-session-environment";
-import { CUSTOM_AGENTS_FILE } from "./custom-agent-store";
 import { type DeepLink, findDeepLink, parseDeepLink } from "./deep-link-router";
 import { requestNotificationPermission, showRetainedNotification } from "./desktop-notifications";
 import { guardDevelopmentOutput } from "./development-output";
@@ -749,6 +748,7 @@ function registerIpcHandlers({
   events,
   customProviderChanges,
   customAgentChanges,
+  customAgentEnvironments,
   acpRegistry,
   providerDetection,
   providerDetectionSettings,
@@ -853,7 +853,7 @@ function registerIpcHandlers({
       getMainWindow: getDialogParent,
       translate: language.translate,
       // A bot that runs on Hermes shows Hermes' own skill bank, not a workspace copy of it.
-      hermesSkills: new HermesSkills({ customAgentsPath: join(app.getPath("userData"), CUSTOM_AGENTS_FILE) }),
+      hermesSkills: new HermesSkills({ customAgents: customAgentEnvironments }),
       agents: () => service.listAgents(),
     }),
     ...agentFolderIpcHandlers({

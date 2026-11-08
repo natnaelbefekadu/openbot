@@ -3,6 +3,8 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import type { InstalledSkill } from "@openbot/contracts/ipc";
 import { parse as parseYaml } from "yaml";
+import type { CustomAgentConfig } from "../backend/custom-acp-agents-client";
+import { hermesRoot } from "./hermes-import-reader";
 
 /**
  * The skills a Hermes agent actually has.
@@ -37,23 +39,6 @@ function text(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-/** The `HERMES_HOME` of one custom agent, read without trusting the file's shape. */
-function readEnv(entry: unknown): string | undefined {
-  if (typeof entry !== "object" || entry === null || !("env" in entry) || !Array.isArray(entry.env)) return;
-  for (const variable of entry.env) {
-    if (typeof variable !== "object" || variable === null) continue;
-    const name = "name" in variable ? text(variable.name) : undefined;
-    const value = "value" in variable ? text(variable.value) : undefined;
-    if (name === "HERMES_HOME" && value) return value;
-  }
-  return;
-}
-
-function readId(entry: unknown): string | undefined {
-  if (typeof entry !== "object" || entry === null || !("id" in entry)) return;
-  return text(entry.id);
-}
-
 function strings(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((item) => {
@@ -81,20 +66,25 @@ function frontmatterOf(raw: unknown): Frontmatter {
 }
 
 export class HermesSkills {
-  readonly #customAgentsPath: string;
+  readonly #customAgents: () => readonly CustomAgentConfig[];
   readonly #hermesCommand: string;
 
-  constructor(options: { customAgentsPath: string; hermesCommand?: string }) {
-    this.#customAgentsPath = options.customAgentsPath;
+  constructor(options: { customAgents: () => readonly CustomAgentConfig[]; hermesCommand?: string }) {
+    this.#customAgents = options.customAgents;
     this.#hermesCommand = options.hermesCommand ?? "hermes";
   }
 
-  /** The Hermes profile an agent runs on, or null when the agent is not a Hermes one. */
+  /**
+   * The Hermes profile an agent runs on, or null when the agent is not a Hermes one. A custom agent
+   * with no `HERMES_HOME` runs on the default profile, which is still Hermes.
+   */
   profileForModel(model: string | undefined): HermesProfileRef | null {
     const prefix = model?.split("/")[0]?.trim();
     if (!prefix) return null;
-    const match = this.#hermesHomes().find((candidate) => candidate.id === prefix);
-    return match ? { profile: basename(match.home), home: match.home } : null;
+    const match = this.#hermesAgents().find((candidate) => candidate.id === prefix);
+    if (!match) return null;
+    const home = match.home ?? hermesRoot();
+    return { profile: basename(home), home };
   }
 
   list(reference: HermesProfileRef): InstalledSkill[] {
@@ -156,23 +146,11 @@ export class HermesSkills {
     });
   }
 
-  #hermesHomes(): Array<{ id: string; home: string }> {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(readFileSync(this.#customAgentsPath, "utf8"));
-    } catch {
-      return [];
-    }
-    const entries = Array.isArray(parsed)
-      ? parsed
-      : typeof parsed === "object" && parsed !== null && "agents" in parsed && Array.isArray(parsed.agents)
-        ? parsed.agents
-        : [];
-    return entries.flatMap((entry) => {
-      const id = readId(entry);
-      const home = readEnv(entry);
-      return id && home ? [{ id, home }] : [];
-    });
+  #hermesAgents(): Array<{ id: string; home: string | null }> {
+    return this.#customAgents().map((agent) => ({
+      id: agent.id,
+      home: agent.env.flatMap((variable) => (variable.name === "HERMES_HOME" ? [variable.value] : []))[0] ?? null,
+    }));
   }
 
   #settings(reference: HermesProfileRef): SkillSettings {

@@ -1,8 +1,10 @@
 import { Effect } from "effect";
 import type { RemoteWorkflowError } from "../remote-service-effects";
+
 // Routines: the scheduled standing instructions attached to one agent, and the calendar of every
 // routine of a host.
 
+import type { AgentSummary } from "@openbot/contracts/ipc";
 import {
   CHANNEL_CHATS_CAPABILITY,
   decodeChannelRoutineRuns,
@@ -26,6 +28,7 @@ import { buildRoutineCalendar, type RoutineCalendarSource } from "@openbot/team-
 import { withRoutineRunPlaces } from "@openbot/team-client/team-api-requests";
 import type { AgentService } from "../../backend/agent-service";
 import { runCauseEffect } from "../../backend/effect-boundary";
+import type { HermesCron } from "../hermes-cron";
 import { localRoutineCalendarSource } from "../local-routine-calendar";
 import {
   decodeAgentSummaries,
@@ -53,16 +56,33 @@ const runPlaceLogger = createOpenBotLogger("routine-run-place");
 interface RoutineIpcDependencies {
   service: AgentService;
   remoteServers: RemoteServerManager;
+  /** A bot that runs on Hermes schedules with Hermes, so its routines are Hermes cron jobs. */
+  hermesCron?: HermesCron;
+  agents?: () => AgentSummary[];
 }
 
 export function routineIpcHandlers({
   service,
   remoteServers,
+  hermesCron,
+  agents,
 }: RoutineIpcDependencies): Pick<IpcGroupHandlers, "agentRoutines"> {
+  // Every mutation branches on the same lookup, so a Hermes job can never be listed by one path
+  // and changed by another.
+  const hermesProfile = (agentId: string) => {
+    if (!hermesCron || !agents) return null;
+    const agent = agents().find((candidate) => candidate.id === agentId);
+    if (agent?.provider !== "acp") return null;
+    return hermesCron.profileForModel(agent.model);
+  };
+
   return {
     agentRoutines: {
       listRoutines: scopedHandler(parseAgentId, {
-        local: (agentId) => service.listRoutines(agentId),
+        local: (agentId) => {
+          const profile = hermesProfile(agentId);
+          return profile && hermesCron ? hermesCron.list(profile, agentId) : service.listRoutines(agentId);
+        },
         remote: (agentId, serverId) =>
           runCauseEffect(
             Effect.gen(function* () {
@@ -83,7 +103,10 @@ export function routineIpcHandlers({
           ),
       }),
       createRoutine: scopedHandler(parseCreateRoutine, {
-        local: (parsed) => service.createRoutine(parsed),
+        local: (parsed) => {
+          const profile = hermesProfile(parsed.agentId);
+          return profile && hermesCron ? hermesCron.create(profile, parsed) : service.createRoutine(parsed);
+        },
         remote: ({ runIn, ...parsed }, serverId) =>
           runCauseEffect(
             remoteServers
@@ -95,7 +118,10 @@ export function routineIpcHandlers({
           ),
       }),
       updateRoutine: scopedHandler(parseUpdateRoutine, {
-        local: (parsed) => service.updateRoutine(parsed),
+        local: (parsed) => {
+          const profile = hermesProfile(parsed.agentId);
+          return profile && hermesCron ? hermesCron.update(profile, parsed) : service.updateRoutine(parsed);
+        },
         remote: ({ runIn, ...parsed }, serverId) =>
           runCauseEffect(
             remoteServers
@@ -107,7 +133,11 @@ export function routineIpcHandlers({
           ),
       }),
       deleteRoutine: scopedHandler(parseDeleteRoutine, {
-        local: (parsed) => runCauseEffect(service.deleteRoutine(parsed)),
+        local: (parsed) => {
+          const profile = hermesProfile(parsed.agentId);
+          if (profile && hermesCron) return hermesCron.remove(profile, parsed);
+          return runCauseEffect(service.deleteRoutine(parsed));
+        },
         remote: (parsed, serverId) =>
           runCauseEffect(
             remoteServers.request(
@@ -121,7 +151,11 @@ export function routineIpcHandlers({
           ),
       }),
       testRoutine: scopedHandler(parseTestRoutine, {
-        local: (parsed) => runCauseEffect(service.testRoutine(parsed)),
+        local: (parsed) => {
+          const profile = hermesProfile(parsed.agentId);
+          if (profile && hermesCron) return hermesCron.test(profile, parsed.agentId, parsed.routineId);
+          return runCauseEffect(service.testRoutine(parsed));
+        },
         remote: (parsed, serverId) =>
           runCauseEffect(
             remoteServers.request(
@@ -133,7 +167,12 @@ export function routineIpcHandlers({
           ),
       }),
       listRoutineRuns: scopedHandler(parseListRoutineRuns, {
-        local: (parsed) => service.listRoutineRuns(parsed, true),
+        local: (parsed) => {
+          const profile = hermesProfile(parsed.agentId);
+          if (profile && hermesCron)
+            return hermesCron.runs(profile, parsed.agentId, parsed.routineId, parsed.limit ?? 20);
+          return service.listRoutineRuns(parsed, true);
+        },
         remote: (parsed, serverId) =>
           runCauseEffect(
             remoteServers.request(

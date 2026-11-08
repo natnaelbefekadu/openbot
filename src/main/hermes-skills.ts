@@ -65,6 +65,23 @@ function frontmatterOf(raw: unknown): Frontmatter {
   };
 }
 
+/**
+ * The Hermes profile a model id names, or null when the prefix is not a custom agent. A custom
+ * agent with no `HERMES_HOME` runs on the default profile, which is still Hermes.
+ */
+export function hermesProfileFor(
+  model: string | undefined,
+  customAgents: () => readonly CustomAgentConfig[],
+): HermesProfileRef | null {
+  const prefix = model?.split("/")[0]?.trim();
+  if (!prefix) return null;
+  const match = customAgents().find((agent) => agent.id === prefix);
+  if (!match) return null;
+  const home =
+    match.env.flatMap((variable) => (variable.name === "HERMES_HOME" ? [variable.value] : []))[0] ?? hermesRoot();
+  return { profile: basename(home), home };
+}
+
 export class HermesSkills {
   readonly #customAgents: () => readonly CustomAgentConfig[];
   readonly #hermesCommand: string;
@@ -74,17 +91,9 @@ export class HermesSkills {
     this.#hermesCommand = options.hermesCommand ?? "hermes";
   }
 
-  /**
-   * The Hermes profile an agent runs on, or null when the agent is not a Hermes one. A custom agent
-   * with no `HERMES_HOME` runs on the default profile, which is still Hermes.
-   */
+  /** The Hermes profile an agent runs on, or null when the agent is not a Hermes one. */
   profileForModel(model: string | undefined): HermesProfileRef | null {
-    const prefix = model?.split("/")[0]?.trim();
-    if (!prefix) return null;
-    const match = this.#hermesAgents().find((candidate) => candidate.id === prefix);
-    if (!match) return null;
-    const home = match.home ?? hermesRoot();
-    return { profile: basename(home), home };
+    return hermesProfileFor(model, this.#customAgents);
   }
 
   list(reference: HermesProfileRef): InstalledSkill[] {
@@ -142,13 +151,6 @@ export class HermesSkills {
         },
       );
     });
-  }
-
-  #hermesAgents(): Array<{ id: string; home: string | null }> {
-    return this.#customAgents().map((agent) => ({
-      id: agent.id,
-      home: agent.env.flatMap((variable) => (variable.name === "HERMES_HOME" ? [variable.value] : []))[0] ?? null,
-    }));
   }
 
   #settings(reference: HermesProfileRef): SkillSettings {

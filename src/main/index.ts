@@ -58,6 +58,7 @@ import {
 } from "./development-profile";
 import { stopStuckExitAfterLimit } from "./exit-watchdog";
 import { filePreviewPages } from "./file-preview-pages";
+import { HermesCron } from "./hermes-cron";
 import { HermesSkills } from "./hermes-skills";
 import { hostAllowsTenantLaunch } from "./host-update-coordinator";
 import { hostedDiskRestoreProbe, takeHostedServerEnvironment } from "./hosted-server-bootstrap";
@@ -927,7 +928,13 @@ function registerIpcHandlers({
     }),
     ...memoryIpcHandlers({ service, remoteServers }),
     ...sharedTableIpcHandlers({ service, remoteServers }),
-    ...routineIpcHandlers({ service, remoteServers }),
+    ...routineIpcHandlers({
+      service,
+      remoteServers,
+      // Hermes owns the schedule for a Hermes bot, so its routines read and write cron there.
+      hermesCron: new HermesCron({ customAgents: customAgentEnvironments }),
+      agents: () => service.listAgents(),
+    }),
     ...routineFlowIpcHandlers({ routineFlows, remoteServers }),
     ...workflowIpcHandlers({ workflows, events, github: workflowGitHub, remoteServers }),
     ...routineResultIpcHandlers({ routineResults }),

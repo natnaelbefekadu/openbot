@@ -13,8 +13,8 @@ upstream PRs, no divergence in the wire protocol.
 | Ref | Meaning |
 | --- | --- |
 | `main` | A pristine snapshot of one upstream release tag. Never edited by hand. |
-| `local` | `main` + the patch series in `patches/`. This is what gets built. |
-| `patches/*.patch` | One `git format-patch` file per change. Ordered, self-contained. |
+| `local` | `main` + the patch series in `fork-patches/`. This is what gets built. |
+| `fork-patches/*.patch` | One `git format-patch` file per change. Ordered, self-contained. |
 
 History is shallow: one commit per release tag, fetched with `--depth=1`. There is
 no shared ancestry with upstream, which is why syncs replay patches with `git am`
@@ -26,11 +26,11 @@ instead of rebasing.
 git checkout local
 # edit
 git commit -am "area: what and why"
-rm -f patches/*.patch
-git format-patch --no-signature -o patches main..local
+rm -f fork-patches/*.patch
+git format-patch --no-signature -o fork-patches main..local
 ```
 
-One commit per concern, so a patch can be dropped by deleting its file.
+One commit per concern, so a patch can be dropped by deleting its file in `fork-patches/`.
 
 ## Syncing to a new release
 

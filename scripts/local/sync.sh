@@ -6,7 +6,7 @@
 #   SKIP_BUILD=1 ./scripts/local/sync.sh     # sync only, no bun install / build
 #
 #   main  = a pristine snapshot of the upstream release tag. Never edited by hand.
-#   local = main + patches/*.patch. This is the branch that gets built.
+#   local = main + fork-patches/*.patch. This is the branch that gets built.
 #
 # History is shallow on purpose: one commit per release tag. `git am` replays the
 # patch series, so no shared ancestry with upstream is needed.
@@ -39,8 +39,8 @@ git branch -f local main
 git checkout -q local
 
 ABORT=0
-if compgen -G "patches/*.patch" > /dev/null; then
-  for p in patches/*.patch; do
+if compgen -G "fork-patches/*.patch" > /dev/null; then
+  for p in fork-patches/*.patch; do
     echo "[sync] applying $(basename "$p")"
     if ! git am --3way "$p"; then
       echo "[sync] FAILED on $p. Resolve the conflict, then:"

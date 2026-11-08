@@ -212,6 +212,7 @@ export const messages = {
   "agentSettings.fileEditor.saved": "Saved",
   "agentSettings.fileEditor.backup": ".bak holds the previous version",
   "agentSettings.fileEditor.unsaved": "Unsaved changes. Save, or reopen the file, before closing.",
+  "agentSettings.fileEditor.discard": "변경 사항 버리기",
   "agentSettings.links.routines": "루틴",
   "agentSettings.links.routinesCount": { other: "{count}개 설정됨" },
   "agentSettings.runtime.workspaceNote":

@@ -229,6 +229,7 @@ export const messages = {
   "agentSettings.fileEditor.saved": "Saved",
   "agentSettings.fileEditor.backup": ".bak holds the previous version",
   "agentSettings.fileEditor.unsaved": "Unsaved changes. Save, or reopen the file, before closing.",
+  "agentSettings.fileEditor.discard": "בטל שינויים",
   "agentSettings.links.routines": "שגרות",
   "agentSettings.links.routinesCount": { one: "אחת הוגדרה", two: "שתיים הוגדרו", other: "{count} הוגדרו" },
   "agentSettings.runtime.workspaceNote":

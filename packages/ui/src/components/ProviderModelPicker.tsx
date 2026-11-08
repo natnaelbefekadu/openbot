@@ -330,15 +330,14 @@ export function ProviderModelPicker(props: ProviderModelPickerProps) {
   /**
    * One provider status per tab. The Custom tab stands for OpenCode or Pi, which serve the endpoints,
    * and for `acp`, which runs the agents: it is available when either of the saved kinds is. The
-   * Hermes rail stands for the Hermes provider and, when the bots run through `acp`, for that too:
-   * whichever of the two can answer is the one the rail reports.
+   * Hermes rail's entries are the `acp` agents, so it reports `acp`; a bot that runs on Hermes
+   * itself is what that provider names.
    */
   const railStatus = (rail: RailId): AgentProviderStatus => {
-    if (rail === HERMES_RAIL && hermesAgents().length) {
-      const own = providerAvailability(props.agentStatus, props.modelOptions, HERMES_RAIL, t);
-      const agents = providerAvailability(props.agentStatus, props.modelOptions, "acp", t);
-      return own.state === "available" || agents.state !== "available" ? own : agents;
-    }
+    // The entries of the Hermes rail are the `acp` agents that run the profiles, so the rail reports
+    // what that provider says: a bot whose catalogue has not arrived yet is checking, not empty.
+    if (rail === HERMES_RAIL && hermesAgents().length)
+      return providerAvailability(props.agentStatus, props.modelOptions, "acp", t);
     if (rail !== CUSTOM_RAIL) return providerAvailability(props.agentStatus, props.modelOptions, rail, t);
     const endpoints = endpointStatus();
     if (agentCount() === 0) return endpoints;
@@ -594,8 +593,12 @@ export function ProviderModelPicker(props: ProviderModelPickerProps) {
   };
   const foreignModelName = () =>
     props.modelOptions.find((model) => model.provider === props.foreignProvider && model.id === props.value)?.name;
-  const triggerModelName = () =>
-    displayModelName(props.foreignProvider === undefined ? selectedModel()?.name : foreignModelName(), props.value);
+  const triggerModelName = () => {
+    if (props.foreignProvider !== undefined) return displayModelName(foreignModelName(), props.value);
+    const name = selectedModel()?.name;
+    // The rail entry already names the bot, so the model is what the trigger adds to it.
+    return displayModelName(withoutAgentPrefix(name, hermesAgents()), props.value);
+  };
   const field = () => props.variant === "field";
   const showsReasoningEffort = () => props.reasoningEffort !== undefined && props.onReasoningEffortChange !== undefined;
   /** An OpenCode model with variants: the chosen variant is its effort, and its name says so. */
@@ -1317,6 +1320,18 @@ function providerStatusLabel(state: AgentProviderStatus["state"], t: AppTranslat
 
 function displayModelName(name: string | undefined, fallback: string): string {
   return name?.replace(/^[\s:–—-]+/, "") || fallback;
+}
+
+/**
+ * A custom agent names its models `<agent>/<model>`. On the Hermes rail the entry already carries the
+ * agent, so the name a bot shows is the model alone.
+ */
+function withoutAgentPrefix(name: string | undefined, agents: readonly CustomAgentSummary[]): string | undefined {
+  if (!name) return name;
+  const owner = [...agents]
+    .sort((left, right) => right.name.length - left.name.length)
+    .find((agent) => name.startsWith(`${agent.name}/`));
+  return owner ? name.slice(owner.name.length + 1) : name;
 }
 
 interface FixedModelSettings {

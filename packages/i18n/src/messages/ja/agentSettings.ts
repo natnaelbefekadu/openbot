@@ -222,6 +222,7 @@ export const messages = {
   "agentSettings.fileEditor.saved": "Saved",
   "agentSettings.fileEditor.backup": ".bak holds the previous version",
   "agentSettings.fileEditor.unsaved": "Unsaved changes. Save, or reopen the file, before closing.",
+  "agentSettings.fileEditor.discard": "変更を破棄",
   "agentSettings.links.routines": "ルーティン",
   "agentSettings.links.routinesCount": { other: "{count} 件設定済み" },
   "agentSettings.runtime.workspaceNote":

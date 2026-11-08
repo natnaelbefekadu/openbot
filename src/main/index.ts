@@ -272,6 +272,11 @@ const analyticsCaptureUrl = !app.isPackaged ? readAnalyticsCaptureUrl(process.en
 // Electron exposes FedCM without an account chooser, so every request fails with a NetworkError.
 // Sites such as Google Sign-In use FedCM when it exists and fall back to their popup when it does not.
 app.commandLine.appendSwitch("disable-features", "FedCm");
+// Linux: a GPU process that fails to launch while the app is quitting spends the fallback budget on
+// nothing, and Chromium then walks a fallback ladder that ends in `LOG(FATAL) "GPU process isn't
+// usable. Goodbye."` — a SIGTRAP, a core dump and a crash banner for a quit the user asked for. With
+// the limit off, a failing GPU process stays in its current mode instead of crashing the browser.
+if (process.platform === "linux") app.commandLine.appendSwitch("disable-gpu-process-crash-limit");
 if (developmentRemoteDebuggingPort) {
   app.commandLine.appendSwitch("remote-debugging-port", developmentRemoteDebuggingPort);
   app.commandLine.appendSwitch("remote-debugging-address", "127.0.0.1");

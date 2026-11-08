@@ -274,6 +274,7 @@ export const messages = {
   "agentSettings.fileEditor.saved": "Saved",
   "agentSettings.fileEditor.backup": ".bak holds the previous version",
   "agentSettings.fileEditor.unsaved": "Unsaved changes. Save, or reopen the file, before closing.",
+  "agentSettings.fileEditor.discard": "تجاهل التغييرات",
   "agentSettings.links.routines": "المهام الدورية",
   "agentSettings.links.routinesCount": {
     zero: "لا مهام دورية مضبوطة",

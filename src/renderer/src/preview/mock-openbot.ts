@@ -3510,8 +3510,20 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
     },
     storage: createMockStorage(),
     hermesFiles: {
-      read: async ({ path }) => ({ path, text: "mock\n", bytes: 5, modifiedAt: new Date(0).toISOString() }),
-      write: async ({ path, text }) => ({ path, text, bytes: text.length, modifiedAt: new Date(0).toISOString() }),
+      read: async ({ path }) => ({
+        path,
+        text: "mock\n",
+        bytes: 5,
+        modifiedAt: new Date(0).toISOString(),
+        digest: "mock-digest",
+      }),
+      write: async ({ path, text }) => ({
+        path,
+        text,
+        bytes: text.length,
+        modifiedAt: new Date(0).toISOString(),
+        digest: "mock-digest",
+      }),
     },
     agentImport: {
       choose: async () => clone(AGENT_IMPORT_PREVIEW),

@@ -11,10 +11,11 @@ export interface HermesFileWriteInput {
   readonly path: string;
   readonly text: string;
   /**
-   * The `modifiedAt` the panel loaded. The save is refused when the file changed since: the agent
-   * writes to these files during its turns, and overwriting its work silently loses it.
+   * A digest of the bytes the panel loaded. The save is refused when the file on disk no longer
+   * matches: the agent writes to these files during its turns, and a timestamp alone misses a
+   * writer that restores mtime (`git checkout`, `cp -p`, `rsync -t`).
    */
-  readonly modifiedAt?: string;
+  readonly digest?: string;
 }
 
 export interface HermesFileContent {
@@ -22,6 +23,8 @@ export interface HermesFileContent {
   readonly text: string;
   readonly bytes: number;
   readonly modifiedAt: string;
+  /** SHA-256 of the bytes on disk, hex. Sent back on save so a stale buffer cannot win. */
+  readonly digest: string;
 }
 
 /** A file bigger than this is not opened in the editor; it is not a source file. */
@@ -48,6 +51,7 @@ export function isHermesFileContent(value: unknown): value is HermesFileContent 
     typeof field(value, "path") === "string" &&
     typeof field(value, "text") === "string" &&
     typeof field(value, "bytes") === "number" &&
-    typeof field(value, "modifiedAt") === "string"
+    typeof field(value, "modifiedAt") === "string" &&
+    typeof field(value, "digest") === "string"
   );
 }

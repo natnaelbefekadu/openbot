@@ -177,16 +177,29 @@ export function pickerModels(
       let name = separator < 0 ? model.name : model.name.slice(separator + 1);
       // A custom agent can serve several providers. Its id holds them as `<agent>/<provider>/<model>`
       // even when its display name does not, so the provider segment of the id is the group. On an
-      // entry that already names the agent, the group is the provider alone.
+      // entry that already names the agent, the group is the provider alone — and on a Hermes entry
+      // the catalogue names its provider, so the name gives the group.
       if (model.provider === "acp") {
         const idSeparator = model.id.indexOf("/");
         const innerId = idSeparator < 0 ? "" : model.id.slice(idSeparator + 1);
-        const providerEnd = innerId.indexOf("/");
-        const provider = providerEnd < 0 ? "" : innerId.slice(0, providerEnd);
-        const agent = servicePrefix && service === servicePrefix ? "" : service;
-        service = [agent, provider].filter(Boolean).join("/");
-        const inner = name.indexOf("/");
-        if (inner >= 0 && (!provider || name.slice(0, inner) === provider)) name = name.slice(inner + 1);
+        if (servicePrefix !== undefined && service === servicePrefix) {
+          const provider = name.indexOf(" · ");
+          if (provider > 0) {
+            service = name.slice(0, provider);
+            name = name.slice(provider + 3);
+          } else if (innerId.startsWith(HERMES_PROXY_PREFIX)) {
+            service = HERMES_PROXY_SERVICE;
+            name = innerId.slice(HERMES_PROXY_PREFIX.length);
+          } else {
+            service = "";
+          }
+        } else {
+          const providerEnd = innerId.indexOf("/");
+          const provider = providerEnd < 0 ? "" : innerId.slice(0, providerEnd);
+          service = [service, provider].filter(Boolean).join("/");
+          const inner = name.indexOf("/");
+          if (inner >= 0 && (!provider || name.slice(0, inner) === provider)) name = name.slice(inner + 1);
+        }
       }
       // A Pi endpoint model is `<endpoint id>/<model>` with Pi's plain name: the endpoint is the group.
       if (model.provider === "pi") {
@@ -223,7 +236,8 @@ export function pickerModels(
         variants: variants.has(model.id)
           ? [{ id: model.id, name: t("app.modelVariant.default") }, ...(variants.get(model.id) ?? [])]
           : [],
-        ...(model.listing ? { listing: model.listing } : {}),
+        // A model on the proxy is always in reach, so it is never folded away as an older one.
+        ...(model.listing && service !== HERMES_PROXY_SERVICE ? { listing: model.listing } : {}),
       };
     });
   // The proxy's models are the ones a bot here is meant to run on, so they head the list.

@@ -219,6 +219,7 @@ export const messages = {
   "agentSettings.fileEditor.saved": "Saved",
   "agentSettings.fileEditor.backup": ".bak holds the previous version",
   "agentSettings.fileEditor.unsaved": "Unsaved changes. Save, or reopen the file, before closing.",
+  "agentSettings.fileEditor.discard": "Descartar alterações",
   "agentSettings.links.routines": "Rotinas",
   "agentSettings.links.routinesCount": { one: "{count} configurada", other: "{count} configuradas" },
   "agentSettings.runtime.workspaceNote":

@@ -1,6 +1,6 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { constants } from "node:fs";
-import { copyFile, lstat, open, realpath, rename, unlink } from "node:fs/promises";
+import { copyFile, constants as fsConstants, lstat, open, realpath, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
@@ -19,8 +19,26 @@ import { isObject, requireString } from "./validation";
 
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 
-/** Folders whose files are configuration or secrets, not source: never opened by this panel. */
-const REFUSED_PREFIXES = [".ssh", ".gnupg", ".hermes", ".config/OpenBot", ".aws", ".kube", ".password-store"];
+/**
+ * Folders whose files are configuration or secrets, not source: never opened by this panel. The
+ * entries are resolved through `realpath`, because `~/.hermes` is a symlink to the real Hermes home
+ * on this machine and a string compare on the unresolved path misses it entirely.
+ */
+const REFUSED_PREFIXES = [
+  ".ssh",
+  ".gnupg",
+  ".hermes",
+  ".aws",
+  ".kube",
+  ".docker",
+  ".password-store",
+  ".config/OpenBot",
+  ".config/gh",
+  ".config/git",
+  ".netrc",
+  ".npmrc",
+  ".git-credentials",
+];
 
 function errorCode(error: unknown): string | undefined {
   return typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
@@ -43,6 +61,14 @@ function explain(error: unknown): Error {
     case "ENOSPC":
     case "EDQUOT":
       return new Error("There is no room on the disk to save that file.");
+    case "EROFS":
+      return new Error("That location is mounted read-only.");
+    case "ENOTDIR":
+      return new Error("Part of that path is not a folder.");
+    case "ENAMETOOLONG":
+      return new Error("That path is too long for this filesystem.");
+    case "EBUSY":
+      return new Error("That file is in use by another program.");
     default:
       return error instanceof Error ? error : new Error(String(error));
   }
@@ -60,11 +86,24 @@ async function refuseSecrets(path: string): Promise<void> {
   // The parent is resolved too: `notes -> ~/.ssh` passes a string test on the leaf path alone.
   const parent = await realpath(base).catch(() => base);
   const resolved = parent === base ? path : join(parent, path.slice(base.length + 1));
-  const fold = process.platform === "linux" ? (value: string) => value : (value: string) => value.toLowerCase();
+  const fold = (value: string) => (process.platform === "linux" ? value : value.toLowerCase());
+  // Every root is resolved the same way, so a symlinked `~/.hermes` is compared by its real home.
+  const roots: Array<{ root: string; label: string }> = [];
   for (const prefix of REFUSED_PREFIXES) {
-    const full = fold(join(home, prefix));
+    const declared = join(home, prefix);
+    const real = await realpath(declared).catch(() => declared);
+    roots.push({ root: real, label: `~/${prefix}` });
+    if (real !== declared) roots.push({ root: declared, label: `~/${prefix}` });
+  }
+  const hermesHome = process.env.HERMES_HOME?.trim();
+  if (hermesHome && isAbsolute(hermesHome)) {
+    const real = await realpath(hermesHome).catch(() => hermesHome);
+    roots.push({ root: real, label: "the Hermes home" }, { root: hermesHome, label: "the Hermes home" });
+  }
+  for (const { root, label } of roots) {
+    const full = fold(root);
     if (within(full, fold(resolved)) || within(full, fold(parent))) {
-      throw new Error(`That file is inside ~/${prefix}, which this panel does not open.`);
+      throw new Error(`That file is inside ${label}, which this panel does not open.`);
     }
   }
 }
@@ -89,7 +128,7 @@ export function parseHermesFileWrite(input: unknown): HermesFileWriteInput {
   return {
     path: parsePath(input),
     text: input.text,
-    modifiedAt: typeof input.modifiedAt === "string" ? input.modifiedAt : undefined,
+    digest: typeof input.digest === "string" ? input.digest : undefined,
   };
 }
 
@@ -100,7 +139,8 @@ interface Opened {
 }
 
 async function readRegular(path: string): Promise<Opened> {
-  const handle = await open(path, constants.O_RDONLY | NOFOLLOW).catch((error: unknown) => {
+  // O_NONBLOCK so a FIFO cannot hang the open; it is ignored for a regular file and for a folder.
+  const handle = await open(path, constants.O_RDONLY | NOFOLLOW | constants.O_NONBLOCK).catch((error: unknown) => {
     throw explain(error);
   });
   try {
@@ -121,8 +161,14 @@ async function readRegular(path: string): Promise<Opened> {
     }
     return {
       text,
-      mode: info.mode & 0o777,
-      content: { path, text, bytes: info.size, modifiedAt: info.mtime.toISOString() },
+      mode: info.mode & 0o7777,
+      content: {
+        path,
+        text,
+        bytes: info.size,
+        modifiedAt: info.mtime.toISOString(),
+        digest: createHash("sha256").update(bytes).digest("hex"),
+      },
     };
   } finally {
     await handle.close();
@@ -130,22 +176,31 @@ async function readRegular(path: string): Promise<Opened> {
 }
 
 /** The first save keeps `<path>.bak`; later saves never overwrite it, so the original survives. */
+/**
+ * A backup name nothing else claims. Both the plain `.bak` and the dated fallback are checked, and
+ * the copy itself is exclusive: a planted symlink at either name cannot make the backup land on
+ * whatever it points at.
+ */
 async function backupPath(path: string): Promise<string> {
-  const first = `${path}.bak`;
-  const existing = await lstat(first).catch(() => null);
-  if (!existing) return first;
-  // A planted symlink at `foo.md.bak` would make the backup overwrite whatever it points at.
-  if (!existing.isFile() || existing.isSymbolicLink()) {
-    throw new Error("A backup beside that file is not a regular file; move it before saving here.");
+  const fallback = `${path}.bak-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomBytes(2).toString("hex")}`;
+  const candidates = [`${path}.bak`, fallback];
+  for (const candidate of candidates) {
+    const existing = await lstat(candidate).catch(() => null);
+    if (!existing) return candidate;
+    if (!existing.isFile() || existing.isSymbolicLink()) {
+      throw new Error("A backup beside that file is not a regular file; move it before saving here.");
+    }
   }
-  return `${path}.bak-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+  return fallback;
 }
 
 async function writeAtomic(path: string, text: string, mode: number): Promise<void> {
   const staged = join(dirname(path), `.${randomBytes(6).toString("hex")}.tmp`);
   try {
-    const out = await open(staged, "wx", mode);
+    // Created private and widened afterwards: the mode argument is filtered by umask, `chmod` is not.
+    const out = await open(staged, "wx", 0o600);
     try {
+      await out.chmod(mode & 0o7777);
       await out.writeFile(text, "utf8");
       // Flushed before the rename: a power cut then leaves either the old file or the new one.
       await out.sync();
@@ -172,10 +227,17 @@ export function hermesFileIpcHandlers(): Pick<IpcGroupHandlers, "hermesFiles"> {
         await refuseSecrets(path);
         return (await readRegular(path)).content;
       }),
-      write: payloadHandler(parseHermesFileWrite, async ({ path, text, modifiedAt }) => {
+      write: payloadHandler(parseHermesFileWrite, async ({ path, text, digest }) => {
         await refuseSecrets(path);
+        // Checked before anything touches the disk: a NUL or a lone surrogate cannot be written and
+        // read back unchanged, and discovering that after the rename would report a good save as a
+        // failure.
+        if (text.includes("\0")) throw new Error("That text has a NUL byte in it, which is not a text file.");
+        if (/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(text)) {
+          throw new Error("That text has a broken character in it; fix it before saving.");
+        }
         const current = await readRegular(path);
-        if (modifiedAt && current.content.modifiedAt !== modifiedAt) {
+        if (digest && current.content.digest !== digest) {
           throw new Error("That file changed since you opened it. Open it again to see what is there now.");
         }
         if (Buffer.byteLength(text, "utf8") > HERMES_FILE_MAX_BYTES) {
@@ -183,12 +245,14 @@ export function hermesFileIpcHandlers(): Pick<IpcGroupHandlers, "hermesFiles"> {
         }
         // The backup is the undo, and the copy keeps the original file's permissions.
         const backup = await backupPath(path);
-        await copyFile(path, backup).catch((error: unknown) => {
+        await copyFile(path, backup, fsConstants.COPYFILE_EXCL).catch((error: unknown) => {
           throw explain(error);
         });
         await writeAtomic(path, text, current.mode);
         const after = await readRegular(path);
-        if (after.text !== text) throw new Error("The file did not keep what was written.");
+        if (after.text !== text) {
+          throw new Error(`The file did not keep what was written; the previous copy is at ${backup}.`);
+        }
         return after.content;
       }),
     },

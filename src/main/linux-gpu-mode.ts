@@ -129,9 +129,18 @@ export function configureLinuxGpu(options: ConfigureLinuxGpuOptions): LinuxGpuMo
   // Not `will-quit`: it fires only after the teardown, which can take longer than a stop allows
   // (the shutdown deadline ends with `app.exit`, and `dev:stop` sends SIGKILL after a few seconds).
   app.once("before-quit", confirmStart);
+  let quitting = false;
+  app.once("before-quit", () => {
+    quitting = true;
+  });
   app.on("child-process-gone", (_event, details) => {
     if (details.type !== "GPU" || !GPU_FAILURE_REASONS.has(details.reason)) return;
     if (details.reason === "abnormal-exit" && details.exitCode === GPU_EXIT_ON_CONTEXT_LOST) return;
+    // A GPU process that fails while the app is quitting is teardown, not a driver fault: the browser
+    // stops its children before it ends, and the launch that follows fails because there is no zygote
+    // left to start it. Recording that would turn off hardware acceleration for a computer whose GPU
+    // works, and the software path is the one that crashes (#992).
+    if (quitting) return;
     logger.warn(`The GPU process stopped (${details.reason}, exit code ${details.exitCode}).`);
     writeGpuFailure(crashPath, chromiumMajor);
   });

@@ -14,14 +14,16 @@ export function AgentFileEditor(props: { open: boolean; onOpenChange: (open: boo
   const { t } = useText();
   const [path, setPath] = createSignal("");
   const [loadedPath, setLoadedPath] = createSignal<string | null>(null);
-  const [loadedAt, setLoadedAt] = createSignal<string | null>(null);
+  const [loadedDigest, setLoadedDigest] = createSignal<string | null>(null);
   const [text, setText] = createSignal("");
   const [saved, setSaved] = createSignal<string | null>(null);
   const [status, setStatus] = createSignal<string | null>(null);
   const [error, setError] = createSignal<string | null>(null);
   const [busy, setBusy] = createSignal(false);
   const dirty = () => saved() !== null && text() !== saved();
-  const detached = () => loadedPath() !== null && path().trim() !== loadedPath();
+  // Compared without trimming: a name may legitimately end in a space, and trimming it would make
+  // that file impossible to save.
+  const detached = () => loadedPath() !== null && path() !== loadedPath();
 
   // An IPC failure arrives wrapped in the remote-method prefix; the panel shows what is left.
   const reason = (cause: unknown) => {
@@ -30,9 +32,11 @@ export function AgentFileEditor(props: { open: boolean; onOpenChange: (open: boo
   };
 
   async function load(target = path().trim()) {
-    if (!target) return;
-    if (dirty() && !detached()) {
-      setError("Save or discard the changes in this file before opening another one.");
+    if (!target || busy()) return;
+    // Any unsaved edit blocks a second open, including one for a different path: the buffer is the
+    // only copy of that work.
+    if (dirty()) {
+      setError(t("agentSettings.fileEditor.unsaved"));
       return;
     }
     setBusy(true);
@@ -44,7 +48,7 @@ export function AgentFileEditor(props: { open: boolean; onOpenChange: (open: boo
       setSaved(file.text);
       setPath(file.path);
       setLoadedPath(file.path);
-      setLoadedAt(file.modifiedAt);
+      setLoadedDigest(file.digest);
       setStatus(`${t("agentSettings.fileEditor.opened")} ${file.bytes} B`);
     } catch (cause) {
       // A failed open must not leave a buffer that looks saved: nothing is loaded.
@@ -52,7 +56,7 @@ export function AgentFileEditor(props: { open: boolean; onOpenChange: (open: boo
       setText("");
       setSaved(null);
       setLoadedPath(null);
-      setLoadedAt(null);
+      setLoadedDigest(null);
     } finally {
       setBusy(false);
     }
@@ -64,18 +68,25 @@ export function AgentFileEditor(props: { open: boolean; onOpenChange: (open: boo
     setBusy(true);
     setError(null);
     try {
-      const at = loadedAt();
+      const digest = loadedDigest();
       const file = await window.openbot.hermesFiles.write(
-        at ? { path: target, text: text(), modifiedAt: at } : { path: target, text: text() },
+        digest ? { path: target, text: text(), digest } : { path: target, text: text() },
       );
       setSaved(file.text);
-      setLoadedAt(file.modifiedAt);
+      setLoadedDigest(file.digest);
       setStatus(`${t("agentSettings.fileEditor.saved")} ${file.bytes} B · ${t("agentSettings.fileEditor.backup")}`);
     } catch (cause) {
       setError(reason(cause));
     } finally {
       setBusy(false);
     }
+  }
+
+  /** Throw the buffer away on purpose, so a dirty dialog is never a trap. */
+  function discard() {
+    setText(saved() ?? "");
+    setError(null);
+    setStatus(null);
   }
 
   function close() {
@@ -152,6 +163,11 @@ export function AgentFileEditor(props: { open: boolean; onOpenChange: (open: boo
               </Button>
               <Show when={dirty()}>
                 <span style={{ opacity: "0.7" }}>{t("agentSettings.fileEditor.dirty")}</span>
+              </Show>
+              <Show when={dirty()}>
+                <Button variant="ghost" onClick={discard}>
+                  {t("agentSettings.fileEditor.discard")}
+                </Button>
               </Show>
               <Show when={status()}>{(message) => <span style={{ opacity: "0.7" }}>{message()}</span>}</Show>
               <Show when={error()}>{(message) => <span style={{ color: "var(--danger)" }}>{message()}</span>}</Show>

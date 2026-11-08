@@ -212,6 +212,7 @@ export const messages = {
   "agentSettings.fileEditor.saved": "Saved",
   "agentSettings.fileEditor.backup": ".bak holds the previous version",
   "agentSettings.fileEditor.unsaved": "Unsaved changes. Save, or reopen the file, before closing.",
+  "agentSettings.fileEditor.discard": "放弃更改",
   "agentSettings.links.routines": "自动化任务",
   "agentSettings.links.routinesCount": { one: "已配置 {count} 个", other: "已配置 {count} 个" },
   "agentSettings.runtime.workspaceNote":

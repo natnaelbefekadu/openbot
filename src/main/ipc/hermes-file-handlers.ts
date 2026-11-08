@@ -13,7 +13,7 @@ import {
 // file: a symlink, a device, a folder, a binary, or a path inside Hermes' own configuration.
 
 import { type IpcGroupHandlers, payloadHandler } from "./define-ipc-group";
-import { requireString } from "./validation";
+import { isObject, requireString } from "./validation";
 
 /** Folders whose files are configuration or secrets, not source: never opened by this panel. */
 const REFUSED_PREFIXES = [".ssh", ".gnupg", ".hermes", ".config/OpenBot", ".aws", ".kube", ".password-store"];
@@ -29,7 +29,9 @@ function refused(path: string): string | null {
 }
 
 function parsePath(input: unknown): string {
-  const path = requireString(input, "path");
+  if (!isObject(input)) throw new Error("Invalid file request.");
+  // A path is longer than an identifier, which is what `requireString` allows by default.
+  const path = requireString(input.path, "path", 4096);
   if (!isAbsolute(path)) throw new Error("A file path has to be absolute.");
   const target = resolve(path);
   const blocked = refused(target);
@@ -42,9 +44,7 @@ export function parseHermesFileRead(input: unknown): HermesFileReadInput {
 }
 
 export function parseHermesFileWrite(input: unknown): HermesFileWriteInput {
-  if (typeof input !== "object" || input === null || !("text" in input) || typeof input.text !== "string") {
-    throw new Error("Invalid file contents.");
-  }
+  if (!isObject(input) || typeof input.text !== "string") throw new Error("Invalid file contents.");
   return { path: parsePath(input), text: input.text };
 }
 

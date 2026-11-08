@@ -28,7 +28,7 @@ export const INPUT_LIMITS = {
   agentInstructionsFile: 32_000,
   // The smallest choice of the app setting `AGENT_MEMORY_LIMITS`.
   agentMemories: 64,
-  agentSkills: 32,
+  agentSkills: 200,
   sharedTables: 64,
   sharedTableName: 64,
   // Half the default agent cap. A channel packet is rebuilt every turn and the memories block is paid in

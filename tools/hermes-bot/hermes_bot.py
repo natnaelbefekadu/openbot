@@ -93,6 +93,44 @@ def ensure_skill_bank(name, steps):
     steps.append({"step": "shared skill bank", "status": "done", "detail": f"{count} skills visible"})
 
 
+# Keys that belong to the host or to one bot's identity, never copied into a new profile: a shared
+# bot token is the duplicate_credential bug, and a shared API server port is a bind conflict.
+HOST_OR_IDENTITY_KEY = re.compile(
+    r"(TELEGRAM|DISCORD|SLACK|SIGNAL|WHATSAPP|MATRIX|BOT_TOKEN|ALLOWED_USERS|CHAT_ID|OWNER_ID"
+    r"|HOME_CHAT|^API_SERVER_|^HERMES_DASHBOARD_|^CAMOFOX_URL)",
+    re.IGNORECASE,
+)
+
+
+def ensure_env(name, steps):
+    """Seed the model credentials a profile needs, and never its messaging identity.
+
+    `profile create` writes no `.env` at all, so a new profile answers every model call with
+    HTTP 401. Messaging keys are deliberately not copied: two profiles sharing a bot token is the
+    duplicate_credential bug.
+    """
+    source = HERMES_HOME / ".env"
+    target = profile_home(name) / ".env"
+    if not source.is_file():
+        steps.append({"step": "model credentials", "status": "skipped", "detail": "no default .env"})
+        return
+    existing = target.read_text() if target.is_file() else ""
+    have = set(re.findall(r"^([A-Z_0-9]+)=", existing, re.MULTILINE))
+    copied = []
+    for line in source.read_text().splitlines():
+        match = re.match(r"^([A-Z_0-9]+)=", line)
+        if not match or match.group(1) in have or HOST_OR_IDENTITY_KEY.search(match.group(1)):
+            continue
+        copied.append(line)
+    if not copied:
+        steps.append({"step": "model credentials", "status": "done", "detail": "nothing missing"})
+        return
+    body = existing if existing.endswith("\n") or not existing else existing + "\n"
+    target.write_text(body + "\n".join(copied) + "\n")
+    names = [line.split("=", 1)[0] for line in copied]
+    steps.append({"step": "model credentials", "status": "done", "detail": f"{len(names)} keys: {', '.join(sorted(names)[:6])}"})
+
+
 def ensure_hindsight_tag(name, steps):
     path = profile_home(name) / "hindsight" / "config.json"
     tag = f"bot:{name}"
@@ -156,6 +194,7 @@ def cmd_create(args):
         run(["profile", "rename", name, args.title])
 
     ensure_skill_bank(name, steps)
+    ensure_env(name, steps)
     ensure_hindsight_tag(name, steps)
     if not args.no_soul:
         copy_soul(name, steps, args.inherit_soul)

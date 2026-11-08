@@ -167,6 +167,49 @@ def cmd_skills(args, profile):
     return fail("unknown skills action")
 
 
+def profile_homes():
+    """The default profile first, then every folder under profiles/ that has a config."""
+    homes = [("default", default_home())]
+    root = default_home() / "profiles"
+    if root.is_dir():
+        for entry in sorted(root.iterdir()):
+            if (entry / "config.yaml").is_file():
+                homes.append((entry.name, entry))
+    return homes
+
+
+def ledger():
+    """Every cron job on this machine, whichever profile owns it.
+
+    Hermes keeps jobs per profile, so a job that lives in `bug-fixer` is invisible from the default
+    profile. That is exactly the question a cron owner has to answer, so it reads them all.
+    """
+    rows = []
+    for profile, home in profile_homes():
+        for job in read_jobs(home):
+            rows.append(
+                {
+                    "profile": profile,
+                    "id": job.get("id"),
+                    "name": job.get("name"),
+                    "enabled": bool(job.get("enabled", True)),
+                    "next_run": job.get("next_run_at"),
+                    "last_run": job.get("last_run_at"),
+                    "last_status": job.get("last_status"),
+                    "last_error": job.get("last_error"),
+                    "deliver": job.get("deliver"),
+                }
+            )
+    failing = [row for row in rows if row["last_status"] in ("failed", "error")]
+    return {
+        "count": len(rows),
+        "enabled": sum(1 for row in rows if row["enabled"]),
+        "profiles": len({row["profile"] for row in rows}),
+        "failing": failing,
+        "jobs": sorted(rows, key=lambda row: (row["next_run"] or "")),
+    }
+
+
 def read_jobs(home):
     path = home / "cron" / "jobs.json"
     if not path.is_file():
@@ -198,6 +241,9 @@ def cmd_cron(args, profile):
                          "script": job.get("script"), "no_agent": job.get("no_agent"),
                          "skills": job.get("skills") or job.get("skill")})
         return ok(count=len(rows), jobs=rows, profile=profile or "default")
+
+    if args.action == "ledger":
+        return ok(**ledger())
 
     if args.action == "get":
         for job in jobs:
@@ -262,7 +308,10 @@ def build_parser():
     s.add_argument("file", nargs="?")
 
     c = sub.add_parser("cron")
-    c.add_argument("action", choices=["list", "get", "create", "pause", "resume", "run", "cancel", "remove"])
+    c.add_argument(
+        "action",
+        choices=["list", "ledger", "get", "create", "pause", "resume", "run", "cancel", "remove"],
+    )
     c.add_argument("job_id", nargs="?")
     c.add_argument("--all", action="store_true")
     c.add_argument("--schedule")

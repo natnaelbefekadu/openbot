@@ -22,7 +22,8 @@ export interface HermesProfileRef {
   home: string;
 }
 
-const SKIPPED_DIRECTORIES = new Set([".archive", "__pycache__"]);
+const SKIPPED_DIRECTORIES = new Set([".archive", "__pycache__", "node_modules"]);
+const MAX_SKILL_DEPTH = 5;
 const NO_SETTINGS = { disabled: [], externalDirs: [] };
 
 interface SkillSettings {
@@ -121,7 +122,7 @@ export class HermesSkills {
   /** Writes `skills.disabled` for one profile, then answers the refreshed list. */
   async setEnabled(reference: HermesProfileRef, skillId: string, enabled: boolean): Promise<InstalledSkill[]> {
     const name = skillId.startsWith("hermes:") ? skillId.slice("hermes:".length) : skillId;
-    const current = this.#settings(reference).disabled;
+    const current = this.#strictSettings(reference).disabled;
     const wanted = enabled ? current.filter((entry) => entry !== name) : [...new Set([...current, name])].sort();
     const changed = wanted.length !== current.length || wanted.some((entry) => !current.includes(entry));
     if (changed) {
@@ -144,13 +145,39 @@ export class HermesSkills {
       execFile(
         executable,
         rest,
-        { env: { ...process.env, HERMES_HOME: reference.home }, timeout: 60_000 },
+        {
+          // Pinning both keeps a sticky `hermes profile use` from redirecting the write to another
+          // profile while these reads stay on the one this agent runs.
+          env: { ...process.env, HERMES_HOME: reference.home, HERMES_PROFILE: reference.profile },
+          timeout: 60_000,
+        },
         (error, _stdout, stderr) => {
           if (error) reject(new Error(stderr.trim() || error.message));
           else resolve();
         },
       );
     });
+  }
+
+  #strictSettings(reference: HermesProfileRef): SkillSettings {
+    const path = join(reference.home, "config.yaml");
+    let contents: string;
+    try {
+      contents = readFileSync(path, "utf8");
+    } catch {
+      return NO_SETTINGS;
+    }
+    if (!contents.trim()) return NO_SETTINGS;
+    const parsed = parseYaml(contents);
+    if (typeof parsed !== "object" || parsed === null) throw new Error("Hermes config.yaml could not be read.");
+    if ("skills" in parsed && typeof parsed.skills === "object" && parsed.skills !== null) {
+      const skills = parsed.skills;
+      // A scalar or a map here would be replaced by the list this write sends, so refuse instead.
+      if ("disabled" in skills && skills.disabled !== undefined && !Array.isArray(skills.disabled)) {
+        throw new Error("Hermes skills.disabled is not a list; refusing to overwrite it.");
+      }
+    }
+    return skillSettings(parsed);
   }
 
   #settings(reference: HermesProfileRef): SkillSettings {
@@ -165,27 +192,30 @@ export class HermesSkills {
     return [join(reference.home, "skills"), ...this.#settings(reference).externalDirs];
   }
 
+  /**
+   * Every skill folder under a root, at any depth: the bank nests by category, and `mlops/inference/x`
+   * is a real skill. Hidden folders are skipped, so `.hub` and `.archive` never contribute.
+   */
   #skillDirectories(reference: HermesProfileRef): Array<[string, string]> {
     const found: Array<[string, string]> = [];
     const seen = new Set<string>();
-    for (const root of this.#roots(reference)) {
-      for (const entry of this.#readDirectory(root)) {
-        const directory = join(root, entry);
-        if (SKIPPED_DIRECTORIES.has(entry) || !this.#isDirectory(directory)) continue;
-        if (this.#hasSkillFile(directory)) {
-          if (seen.has(entry)) continue;
-          seen.add(entry);
-          found.push([entry, directory]);
-          continue;
+    const walk = (directory: string, depth: number): void => {
+      if (depth > MAX_SKILL_DEPTH) return;
+      if (this.#hasSkillFile(directory)) {
+        const name = basename(directory);
+        if (!seen.has(name)) {
+          seen.add(name);
+          found.push([name, directory]);
         }
-        for (const child of this.#readDirectory(directory)) {
-          const nested = join(directory, child);
-          if (seen.has(child) || !this.#hasSkillFile(nested)) continue;
-          seen.add(child);
-          found.push([child, nested]);
-        }
+        return;
       }
-    }
+      for (const entry of this.#readDirectory(directory)) {
+        if (entry.startsWith(".") || SKIPPED_DIRECTORIES.has(entry)) continue;
+        const nested = join(directory, entry);
+        if (this.#isDirectory(nested)) walk(nested, depth + 1);
+      }
+    };
+    for (const root of this.#roots(reference)) walk(root, 0);
     return found;
   }
 

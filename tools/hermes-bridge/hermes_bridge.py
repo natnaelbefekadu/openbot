@@ -23,7 +23,8 @@ from pathlib import Path
 
 HERMES = shutil.which("hermes") or str(Path.home() / ".local/bin/hermes")
 DEFAULT_HOME = Path.home() / ".hermes"
-SKIP_DIRS = {".archive", "__pycache__"}
+SKIP_DIRS = {".archive", "__pycache__", "node_modules"}
+MAX_SKILL_DEPTH = 5
 
 
 PROFILE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -78,19 +79,17 @@ def skill_dirs(home):
     found = {}
     roots = [home / "skills"]
     for extra in (load_config(home).get("skills") or {}).get("external_dirs") or []:
-        roots.append(Path(extra))
+        roots.append(Path(extra).expanduser())
     for root in roots:
         if not root.is_dir():
             continue
-        for entry in sorted(root.iterdir()):
-            if not entry.is_dir() or entry.name in SKIP_DIRS:
+        for path in sorted(root.rglob("SKILL.md")):
+            directory = path.parent
+            if any(part.startswith(".") or part in SKIP_DIRS for part in directory.relative_to(root).parts):
                 continue
-            if (entry / "SKILL.md").is_file():
-                found.setdefault(entry.name, entry)
-            else:
-                for sub in sorted(entry.iterdir()):
-                    if sub.is_dir() and (sub / "SKILL.md").is_file():
-                        found.setdefault(sub.name, sub)
+            if len(directory.relative_to(root).parts) > MAX_SKILL_DEPTH:
+                continue
+            found.setdefault(directory.name, directory)
     return found
 
 
@@ -245,8 +244,15 @@ def cmd_models(args, profile):
               note="per-agent catalogs come from ACP agent.listModels")
 
 
+class JsonArgumentParser(argparse.ArgumentParser):
+    """Every failure prints one JSON object, so a caller never gets empty stdout and exit 2."""
+
+    def error(self, message):
+        fail("usage: %s" % message)
+
+
 def build_parser():
-    parser = argparse.ArgumentParser(prog="hermes-bridge")
+    parser = JsonArgumentParser(prog="hermes-bridge")
     parser.add_argument("--profile", default=None)
     sub = parser.add_subparsers(dest="group", required=True)
 

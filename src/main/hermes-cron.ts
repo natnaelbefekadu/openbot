@@ -176,9 +176,15 @@ export class HermesCron {
     if (input.name !== undefined) args.push("--name", input.name);
     if (args.length > 3) await this.#run(reference, args);
     if (input.active !== undefined) {
-      const job = this.#job(reference, id);
-      const enabled = job?.enabled === true;
-      if (enabled !== input.active) await this.#run(reference, ["cron", input.active ? "resume" : "pause", id]);
+      const enabled = this.#job(reference, id)?.enabled === true;
+      if (enabled !== input.active) {
+        const action = input.active ? "resume" : "pause";
+        await this.#run(reference, ["cron", action, id]);
+        // The exit code is not the state: read it back before telling the panel it worked.
+        if ((this.#job(reference, id)?.enabled === true) !== input.active) {
+          throw new Error(`Hermes did not ${action} that job.`);
+        }
+      }
     }
     return this.#toRoutine(this.#requireJob(reference, id), input.agentId);
   }
@@ -302,7 +308,11 @@ export class HermesCron {
       execFile(
         executable,
         rest,
-        { env: { ...process.env, HERMES_HOME: reference.home }, timeout, maxBuffer: 4 * 1024 * 1024 },
+        {
+          env: { ...process.env, HERMES_HOME: reference.home, HERMES_PROFILE: reference.profile },
+          timeout,
+          maxBuffer: 4 * 1024 * 1024,
+        },
         (error, stdout, stderr) => {
           if (error) reject(new Error(stderr.trim() || error.message));
           else resolve(stdout);

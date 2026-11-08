@@ -44,7 +44,7 @@ export function skillIpcHandlers({
   const hermesProfile = (agentId: string) => {
     if (!hermesSkills?.profileForModel || !agents) return null;
     const agent = agents().find((candidate) => candidate.id === agentId);
-    if (agent?.provider !== "acp") return null;
+    if (agent?.provider !== "acp" && agent?.provider !== "hermes") return null;
     return hermesSkills.profileForModel(agent.model);
   };
 

@@ -72,7 +72,7 @@ export function routineIpcHandlers({
   const hermesProfile = (agentId: string) => {
     if (!hermesCron || !agents) return null;
     const agent = agents().find((candidate) => candidate.id === agentId);
-    if (agent?.provider !== "acp") return null;
+    if (agent?.provider !== "acp" && agent?.provider !== "hermes") return null;
     return hermesCron.profileForModel(agent.model);
   };
 

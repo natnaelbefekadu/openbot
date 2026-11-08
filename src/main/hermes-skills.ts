@@ -66,9 +66,16 @@ function frontmatterOf(raw: unknown): Frontmatter {
   };
 }
 
+/** A custom agent counts as Hermes only when it actually launches Hermes. */
+export function isHermesCustomAgent(agent: CustomAgentConfig): boolean {
+  const command = basename(agent.command).toLowerCase();
+  if (command === "hermes" || command.startsWith("hermes-") || command === "hermes-agent") return true;
+  return agent.env.some((variable) => variable.name === "HERMES_HOME" || variable.name === "HERMES_PROFILE");
+}
+
 /**
- * The Hermes profile a model id names, or null when the prefix is not a custom agent. A custom
- * agent with no `HERMES_HOME` runs on the default profile, which is still Hermes.
+ * The Hermes profile a model id names, or null when the prefix is not a Hermes custom agent. A
+ * custom agent with no `HERMES_HOME` runs on the default profile, which is still Hermes.
  */
 export function hermesProfileFor(
   model: string | undefined,
@@ -76,11 +83,26 @@ export function hermesProfileFor(
 ): HermesProfileRef | null {
   const prefix = model?.split("/")[0]?.trim();
   if (!prefix) return null;
-  const match = customAgents().find((agent) => agent.id === prefix);
+  const match = customAgents().find((agent) => agent.id === prefix && isHermesCustomAgent(agent));
   if (!match) return null;
   const home =
     match.env.flatMap((variable) => (variable.name === "HERMES_HOME" ? [variable.value] : []))[0] ?? hermesRoot();
   return { profile: basename(home), home };
+}
+
+function missingFile(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+
+function readTextOr(path: string): string | null {
+  try {
+    return readFileSync(path, "utf8");
+  } catch (error) {
+    // Only a missing file means "empty". Anything else is unreadable, and must not be treated as
+    // "nothing there": writing back then replaces what could not be read.
+    if (missingFile(error)) return null;
+    throw error;
+  }
 }
 
 export class HermesSkills {
@@ -100,9 +122,13 @@ export class HermesSkills {
   list(reference: HermesProfileRef): InstalledSkill[] {
     const disabled = new Set(this.#settings(reference).disabled);
     const rows: InstalledSkill[] = [];
+    const used = new Set<string>();
     for (const [name, directory] of this.#skillDirectories(reference)) {
       const meta = this.#frontmatter(join(directory, "SKILL.md"));
       const display = meta.name ?? name;
+      // Two folders can declare the same name; one row per name keeps keys unique and the toggle honest.
+      if (used.has(display)) continue;
+      used.add(display);
       rows.push({
         skillId: `hermes:${display}`,
         slug: display,
@@ -160,14 +186,8 @@ export class HermesSkills {
   }
 
   #strictSettings(reference: HermesProfileRef): SkillSettings {
-    const path = join(reference.home, "config.yaml");
-    let contents: string;
-    try {
-      contents = readFileSync(path, "utf8");
-    } catch {
-      return NO_SETTINGS;
-    }
-    if (!contents.trim()) return NO_SETTINGS;
+    const contents = readTextOr(join(reference.home, "config.yaml"));
+    if (contents === null || !contents.trim()) return NO_SETTINGS;
     const parsed = parseYaml(contents);
     if (typeof parsed !== "object" || parsed === null) throw new Error("Hermes config.yaml could not be read.");
     if ("skills" in parsed && typeof parsed.skills === "object" && parsed.skills !== null) {
@@ -181,11 +201,9 @@ export class HermesSkills {
   }
 
   #settings(reference: HermesProfileRef): SkillSettings {
-    try {
-      return skillSettings(parseYaml(readFileSync(join(reference.home, "config.yaml"), "utf8")));
-    } catch {
-      return NO_SETTINGS;
-    }
+    const contents = readTextOr(join(reference.home, "config.yaml"));
+    if (contents === null || !contents.trim()) return NO_SETTINGS;
+    return skillSettings(parseYaml(contents));
   }
 
   #roots(reference: HermesProfileRef): string[] {

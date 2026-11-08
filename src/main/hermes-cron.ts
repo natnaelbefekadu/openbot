@@ -41,12 +41,27 @@ function str(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
+function isJobEntry(value: unknown): value is HermesJob {
+  return typeof value === "object" && value !== null;
+}
+
 function scheduleOf(job: HermesJob): RoutineSchedule {
   const schedule = job.schedule;
   if (typeof schedule === "object" && schedule !== null) {
     const kind = "kind" in schedule ? schedule.kind : undefined;
     const expr = "expr" in schedule ? str(schedule.expr) : undefined;
     if (kind === "cron" && expr) return { kind: "custom", expression: expr };
+    if (kind === "interval") {
+      const minutes = "minutes" in schedule ? Number(schedule.minutes) : Number.NaN;
+      if (Number.isFinite(minutes) && minutes > 0) {
+        return {
+          kind: "interval",
+          amount: minutes,
+          unit: "minutes",
+          anchorAt: str(job.created_at) ?? new Date().toISOString(),
+        };
+      }
+    }
     if (kind === "once") {
       const next = str(job.next_run_at) ?? str(job.last_run_at);
       if (next) {
@@ -148,24 +163,18 @@ export class HermesCron {
 
   async create(reference: HermesProfileRef, input: CreateRoutineInput): Promise<Routine> {
     const expression = expressionOf(input.schedule);
-    const before = new Set(this.#jobs(reference).map((job) => str(job.id)));
+    const args = ["cron", "create", expression, input.instruction, "--name", input.name, "--deliver", DELIVERY];
     // `origin` is the CLI's default and has no meaning for a job started from this panel, so name
-    // the bot's own Bot Chat: the output lands where the user reads, not on an external channel.
-    await this.#run(reference, [
-      "cron",
-      "create",
-      expression,
-      input.instruction,
-      "--name",
-      input.name,
-      "--deliver",
-      DELIVERY,
-    ]);
-    const created = this.#jobs(reference).find((job) => !before.has(str(job.id)));
-    if (!created) throw new Error("Hermes reported no new job.");
-    if (!input.active) await this.#run(reference, ["cron", "pause", str(created.id) ?? ""]);
-    const job = this.#jobs(reference).find((candidate) => str(candidate.id) === str(created.id)) ?? created;
-    return this.#toRoutine(job, input.agentId);
+    // the bot's own Bot Chat; a non-default profile needs its name, or the output lands elsewhere.
+    if (reference.profile !== "default" && reference.profile !== ".hermes") {
+      args[args.length - 1] = `${DELIVERY}:${reference.profile}`;
+    }
+    // Create it paused in one write: a follow-up `pause` leaves a window where a short interval fires.
+    if (!input.active) args.push("--paused");
+    const output = await this.#capture(reference, args);
+    const createdId = /Created job:\s*(\S+)/.exec(output)?.[1];
+    if (!createdId) throw new Error("Hermes did not name the job it created.");
+    return this.#toRoutine(this.#requireJob(reference, createdId), input.agentId);
   }
 
   async update(reference: HermesProfileRef, input: UpdateRoutineInput): Promise<Routine> {
@@ -219,30 +228,36 @@ export class HermesCron {
   async runs(reference: HermesProfileRef, agentId: string, routineId: string, limit = 20): Promise<RoutineRun[]> {
     const job = this.#job(reference, routineId);
     const output = await this.#capture(reference, ["cron", "runs", routineId, "--limit", String(limit)]);
-    return output.split("\n").flatMap((line) => {
-      const parts = line.trim().split(/\s+/);
-      if (parts.length < 4) return [];
-      const [runId, status, , , at] = parts;
-      if (!runId || !status) return [];
-      const when = at ?? new Date().toISOString();
-      return [
-        {
-          id: runId,
-          agentId,
-          routineId,
-          triggerId: null,
-          kind: "scheduled",
-          scheduledFor: when,
-          routineName: str(job?.name) ?? routineId,
-          instruction: str(job?.prompt) ?? "",
-          status: statusOf(status),
-          error: null,
-          createdAt: when,
-          updatedAt: when,
-          deliveryId: null,
-        },
-      ];
-    });
+    const rows: RoutineRun[] = [];
+    let pendingError: string | null = null;
+    for (const line of output.split("\n")) {
+      // Hermes prints an execution per line, then an indented reason under a failed one. Matching the
+      // shape, instead of splitting on whitespace, is what keeps error text out of the run list.
+      const match = /^([0-9a-fA-F]{6,})\s+([a-z-]+)\s+job=(\S+)/.exec(line.trim());
+      if (!match) {
+        if (rows.length > 0 && line.trim() && line.startsWith(" ")) pendingError = line.trim().slice(0, 400);
+        continue;
+      }
+      const [, runId, status, ,] = match;
+      const at = line.trim().split(/\s+/).pop() ?? new Date().toISOString();
+      rows.push({
+        id: runId ?? "",
+        agentId,
+        routineId,
+        triggerId: null,
+        kind: "scheduled",
+        scheduledFor: at,
+        routineName: str(job?.name) ?? routineId,
+        instruction: str(job?.prompt) ?? "",
+        status: statusOf(status),
+        error: null,
+        createdAt: at,
+        updatedAt: at,
+        deliveryId: null,
+      });
+    }
+    if (pendingError && rows[0]) rows[0] = { ...rows[0], error: pendingError };
+    return rows;
   }
 
   #toRoutine(job: HermesJob, agentId: string): Routine {
@@ -273,18 +288,23 @@ export class HermesCron {
   }
 
   #jobs(reference: HermesProfileRef): HermesJob[] {
-    let parsed: unknown;
+    let contents: string;
     try {
-      parsed = JSON.parse(readFileSync(this.#jobsPath(reference), "utf8"));
-    } catch {
-      return [];
+      contents = readFileSync(this.#jobsPath(reference), "utf8");
+    } catch (error) {
+      // A missing store is an empty one. An unreadable store is not: reporting zero jobs would say
+      // "you have none" about jobs that exist, and every write then verifies against nothing.
+      const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+      if (code === "ENOENT") return [];
+      throw error;
     }
+    const parsed = JSON.parse(contents);
     const list = Array.isArray(parsed)
       ? parsed
       : typeof parsed === "object" && parsed !== null && "jobs" in parsed && Array.isArray(parsed.jobs)
         ? parsed.jobs
         : [];
-    return list.flatMap((entry) => (typeof entry === "object" && entry !== null ? [entry] : []));
+    return list.flatMap((entry: unknown) => (isJobEntry(entry) ? [entry] : []));
   }
 
   #job(reference: HermesProfileRef, id: string): HermesJob | undefined {
@@ -314,8 +334,16 @@ export class HermesCron {
           maxBuffer: 4 * 1024 * 1024,
         },
         (error, stdout, stderr) => {
-          if (error) reject(new Error(stderr.trim() || error.message));
-          else resolve(stdout);
+          if (error) {
+            // Hermes prints its own failures to stdout, so stderr alone would surface
+            // "Command failed: …" instead of the reason.
+            const reason = [stdout, stderr]
+              .flatMap((stream) => (stream ?? "").trim().split("\n"))
+              .map((line) => line.trim())
+              .filter(Boolean)
+              .pop();
+            reject(new Error(reason ?? error.message));
+          } else resolve(stdout);
         },
       );
     });

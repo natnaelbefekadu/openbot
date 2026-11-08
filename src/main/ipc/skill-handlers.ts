@@ -7,9 +7,11 @@ import {
 } from "./local-skill-inputs";
 // The skill marketplace, and the skills installed into a workspace.
 
+import type { AgentSummary } from "@openbot/contracts/ipc";
 import type { AppTranslate } from "@openbot/i18n";
 import { type BrowserWindow, dialog, type OpenDialogOptions } from "electron";
 import { runCauseEffect } from "../../backend/effect-boundary";
+import type { HermesSkills } from "../hermes-skills";
 import type { SkillMarketplaceService } from "../skill-marketplace-service";
 import {
   parseInstallSkill,
@@ -25,13 +27,27 @@ export interface SkillIpcDependencies {
   skills: SkillMarketplaceService;
   getMainWindow: () => BrowserWindow | null;
   translate: AppTranslate;
+  /** An agent that runs on Hermes reads and writes the shared Hermes bank instead of a workspace. */
+  hermesSkills?: HermesSkills;
+  agents?: () => AgentSummary[];
 }
 
 export function skillIpcHandlers({
   skills,
   getMainWindow,
   translate,
+  hermesSkills,
+  agents,
 }: SkillIpcDependencies): Pick<IpcGroupHandlers, "skills"> {
+  // The one Hermes profile an agent runs on, or null for every other provider. Narrow on
+  // `provider` first so an agent that merely has the model id shape never reaches the bridge.
+  const hermesProfile = (agentId: string) => {
+    if (!hermesSkills?.profileForModel || !agents) return null;
+    const agent = agents().find((candidate) => candidate.id === agentId);
+    if (agent?.provider !== "acp") return null;
+    return hermesSkills.profileForModel(agent.model);
+  };
+
   return {
     skills: {
       localList: handler(() => runCauseEffect(localSkillTools(skills).list())),
@@ -62,12 +78,20 @@ export function skillIpcHandlers({
         return result.canceled || !result.filePaths[0] ? null : runCauseEffect(skills.stage(result.filePaths[0]));
       }),
       submit: payloadHandler(parseSubmitSkill, (submission) => runCauseEffect(skills.submit(submission))),
-      listInstalled: payloadHandler(stringPayload("agentId"), (agentId) =>
-        runCauseEffect(skills.listInstalled(agentId)),
-      ),
+      listInstalled: payloadHandler(stringPayload("agentId"), async (agentId) => {
+        const profile = hermesProfile(agentId);
+        return profile && hermesSkills ? hermesSkills.list(profile) : runCauseEffect(skills.listInstalled(agentId));
+      }),
       install: payloadHandler(parseInstallSkill, (installation) => runCauseEffect(skills.install(installation))),
       uninstall: payloadHandler(parseUninstallSkill, (removal) => runCauseEffect(skills.uninstall(removal))),
-      setEnabled: payloadHandler(parseSetEnabledSkill, (change) => runCauseEffect(skills.setEnabled(change))),
+      setEnabled: payloadHandler(parseSetEnabledSkill, async (change) => {
+        const profile = hermesProfile(change.agentId);
+        if (!profile || !hermesSkills) return runCauseEffect(skills.setEnabled(change));
+        const updated = await hermesSkills.setEnabled(profile, change.skillId, change.enabled);
+        const changed = updated.find((skill) => skill.skillId === change.skillId) ?? updated[0];
+        if (!changed) throw new Error("Hermes returned no skill after the change.");
+        return changed;
+      }),
     },
   };
 }

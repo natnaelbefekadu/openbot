@@ -45,6 +45,7 @@ import {
 } from "./application-services";
 import { type BackgroundTray, createBackgroundTray } from "./background-tray";
 import { removeClaudeCodeSessionEnvironment } from "./claude-session-environment";
+import { CUSTOM_AGENTS_FILE } from "./custom-agent-store";
 import { type DeepLink, findDeepLink, parseDeepLink } from "./deep-link-router";
 import { requestNotificationPermission, showRetainedNotification } from "./desktop-notifications";
 import { guardDevelopmentOutput } from "./development-output";
@@ -58,6 +59,7 @@ import {
 } from "./development-profile";
 import { stopStuckExitAfterLimit } from "./exit-watchdog";
 import { filePreviewPages } from "./file-preview-pages";
+import { HermesSkills } from "./hermes-skills";
 import { hostAllowsTenantLaunch } from "./host-update-coordinator";
 import { hostedDiskRestoreProbe, takeHostedServerEnvironment } from "./hosted-server-bootstrap";
 import { takeHostingDeveloperKey } from "./hosted-server-service";
@@ -846,7 +848,14 @@ function registerIpcHandlers({
       forwardLiveEvent: forwardVoiceLiveEvent,
     }),
     ...accountIpcHandlers({ centralAuth, host }),
-    ...skillIpcHandlers({ skills, getMainWindow: getDialogParent, translate: language.translate }),
+    ...skillIpcHandlers({
+      skills,
+      getMainWindow: getDialogParent,
+      translate: language.translate,
+      // A bot that runs on Hermes shows Hermes' own skill bank, not a workspace copy of it.
+      hermesSkills: new HermesSkills({ customAgentsPath: join(app.getPath("userData"), CUSTOM_AGENTS_FILE) }),
+      agents: () => service.listAgents(),
+    }),
     ...agentFolderIpcHandlers({
       folders: agentFolders,
       remoteServers,

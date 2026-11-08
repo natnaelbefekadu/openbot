@@ -24,7 +24,6 @@ import {
   defaultProviderModel,
   isCustomProviderHarness,
   isReasoningEffort,
-  PICKER_PROVIDERS,
   providerDisplayName,
 } from "@openbot/contracts/ipc";
 import type { AppTextKey, AppTranslate } from "@openbot/i18n";
@@ -62,6 +61,7 @@ import {
   groupPickerModels,
   isCustomEndpointModel,
   isCustomModel,
+  isHermesCustomAgent,
   type PickerModel,
   type PickerModelGroup,
   pickerModels,
@@ -136,7 +136,15 @@ type RailId = AgentProviderId | "custom";
 
 const CUSTOM_RAIL = "custom" as const;
 
-const PROVIDERS: readonly RailId[] = [...PICKER_PROVIDERS, CUSTOM_RAIL];
+/**
+ * The rail a bot's brain is drawn on. In this fork every bot runs a Hermes profile through a custom
+ * `hermes acp` agent, so those agents are entries on the Hermes rail — the mark the bot answers on,
+ * not a Custom tab that hides which brain is running. The rail is Hermes alone: `PICKER_PROVIDERS`
+ * carries no other provider, and the Custom rail, which is the other ACP agents, is not listed.
+ */
+const HERMES_RAIL = "hermes" as const;
+
+const PROVIDERS: readonly RailId[] = [HERMES_RAIL];
 
 /**
  * A rail entry: a provider tab, or an account of it after the first. An account entry's key is the
@@ -208,6 +216,25 @@ export function ProviderModelPicker(props: ProviderModelPickerProps) {
   const visibleProviders = createMemo(() =>
     PROVIDERS.filter((provider) => provider === CUSTOM_RAIL || !providerTurnedOff(props.agentStatus, provider)),
   );
+  /**
+   * The user's Hermes agents: one rail entry each, so a bot's models are chosen on the mark its
+   * profile answers on. Any other custom agent is not a brain this fork offers, so it stays out.
+   */
+  const hermesAgents = createMemo(() => (props.customAgents ?? []).filter(isHermesCustomAgent));
+  const agentKey = (agentId: string): RailKey => `${HERMES_RAIL}:${agentId}` as const;
+  /** The custom agent a rail entry stands for, or null for a provider's own entry. */
+  const agentIdOfKey = (key: RailKey): string | null =>
+    railOf(key) === HERMES_RAIL && key.length > HERMES_RAIL.length + 1 ? key.slice(HERMES_RAIL.length + 1) : null;
+  /** The name of the agent a rail entry stands for, which its models are listed under. */
+  const hermesAgentName = (key: RailKey): string | undefined => {
+    const agentId = agentIdOfKey(key);
+    return agentId === null ? undefined : hermesAgents().find((agent) => agent.id === agentId)?.name;
+  };
+  /** Whether a model is one that a Hermes agent lists: the wire provider `acp`, named by the agent. */
+  const isHermesAgentModel = (option: ClientAgentModelOption): boolean => {
+    const agentId = option.provider === "acp" ? customAgentIdOfModel(option.id) : null;
+    return agentId !== null && hermesAgents().some((agent) => agent.id === agentId);
+  };
   /** The accounts that get rail entries: only a provider's with more than one, and only on request. */
   const railAccounts = (rail: RailId): readonly ProviderAccountStatus[] => {
     if (!props.accountChoice || rail === CUSTOM_RAIL) return [];
@@ -216,6 +243,7 @@ export function ProviderModelPicker(props: ProviderModelPickerProps) {
   };
   const railKeys = createMemo<RailKey[]>(() =>
     visibleProviders().flatMap((rail): RailKey[] => {
+      if (rail === HERMES_RAIL && hermesAgents().length) return hermesAgents().map((agent) => agentKey(agent.id));
       const accounts = railAccounts(rail);
       if (!accounts.length || rail === CUSTOM_RAIL) return [rail];
       return accounts.map((account) =>
@@ -236,12 +264,17 @@ export function ProviderModelPicker(props: ProviderModelPickerProps) {
     findModelOption(props.modelOptions, props.agentStatus?.providers, provider, id);
   const selectedModel = createMemo(() => modelOption(props.provider, props.value));
   const selectedFixed = createMemo(() => fixedModelSettings(selectedModel()));
-  /** The tab the current selection lives on: the Custom one for the user's endpoints and agents. */
+  /** The rail the current selection lives on: Hermes for a bot that runs on it, else Custom. */
   const activeProvider = (): RailId =>
-    props.provider === "acp" || isCustomEndpointModel(props.provider, props.value, customIds())
-      ? CUSTOM_RAIL
+    props.provider === "acp" ||
+    props.provider === "hermes" ||
+    isCustomEndpointModel(props.provider, props.value, customIds())
+      ? HERMES_RAIL
       : props.provider;
   const activeKey = (): RailKey => {
+    // A bot's own entry holds it: the entry of the Hermes agent its model names.
+    const agentId = props.provider === "acp" ? customAgentIdOfModel(props.value) : null;
+    if (agentId && hermesAgents().some((agent) => agent.id === agentId)) return agentKey(agentId);
     const account = currentAccount();
     const rail = activeProvider();
     return account && rail !== CUSTOM_RAIL ? `${rail}:${account}` : rail;
@@ -250,9 +283,14 @@ export function ProviderModelPicker(props: ProviderModelPickerProps) {
   /** The provider whose mark the trigger shows, so only a changed one springs in. */
   let shownProvider = untrack(activeProvider);
 
-  /** The OpenCode, Pi and Custom tabs split one wire provider so each model appears once. */
+  /** The Hermes rail's models: Hermes' own catalogue and every Hermes bot's, so no brain is lost. */
   function railModelOptions(rail: RailId): ClientAgentModelOption[] {
     if (rail === CUSTOM_RAIL) return props.modelOptions.filter((option) => isCustomModel(option, customIds()));
+    if (rail === HERMES_RAIL)
+      return props.modelOptions.filter(
+        (option) =>
+          !isCustomModel(option, customIds()) && (option.provider === HERMES_RAIL || isHermesAgentModel(option)),
+      );
     return props.modelOptions.filter((option) => option.provider === rail && !isCustomModel(option, customIds()));
   }
 
@@ -291,9 +329,16 @@ export function ProviderModelPicker(props: ProviderModelPickerProps) {
   };
   /**
    * One provider status per tab. The Custom tab stands for OpenCode or Pi, which serve the endpoints,
-   * and for `acp`, which runs the agents: it is available when either of the saved kinds is.
+   * and for `acp`, which runs the agents: it is available when either of the saved kinds is. The
+   * Hermes rail stands for the Hermes provider and, when the bots run through `acp`, for that too:
+   * whichever of the two can answer is the one the rail reports.
    */
   const railStatus = (rail: RailId): AgentProviderStatus => {
+    if (rail === HERMES_RAIL && hermesAgents().length) {
+      const own = providerAvailability(props.agentStatus, props.modelOptions, HERMES_RAIL, t);
+      const agents = providerAvailability(props.agentStatus, props.modelOptions, "acp", t);
+      return own.state === "available" || agents.state !== "available" ? own : agents;
+    }
     if (rail !== CUSTOM_RAIL) return providerAvailability(props.agentStatus, props.modelOptions, rail, t);
     const endpoints = endpointStatus();
     if (agentCount() === 0) return endpoints;
@@ -312,9 +357,16 @@ export function ProviderModelPicker(props: ProviderModelPickerProps) {
   };
   /**
    * The models of a rail entry: the provider's list, and then the models that only the entry's
-   * account serves, as a plan can serve more than the provider's own sign-in (#5217).
+   * account serves, as a plan can serve more than the provider's own sign-in (#5217). A Hermes
+   * agent's entry lists that agent's models alone: six bots share one catalogue, and a bot's own
+   * models are the ones it can run.
    */
   const entryModelOptions = (key: RailKey): ClientAgentModelOption[] => {
+    const agentId = agentIdOfKey(key);
+    if (agentId)
+      return props.modelOptions.filter(
+        (option) => option.provider === "acp" && customAgentIdOfModel(option.id) === agentId,
+      );
     const shared = railModelOptions(railOf(key));
     const own = entryAccount(key)?.account.models ?? [];
     return own.length ? [...shared, ...own] : shared;
@@ -335,6 +387,8 @@ export function ProviderModelPicker(props: ProviderModelPickerProps) {
     };
   };
   const entryName = (key: RailKey): string => {
+    const agent = hermesAgentName(key);
+    if (agent) return `${railName(railOf(key), t)} · ${agent}`;
     const entry = entryAccount(key);
     return entry ? `${railName(railOf(key), t)} · ${entry.name}` : railName(railOf(key), t);
   };
@@ -368,8 +422,13 @@ export function ProviderModelPicker(props: ProviderModelPickerProps) {
   );
   const modelAvailable = (model: PickerModel): boolean =>
     providerAvailability(props.agentStatus, props.modelOptions, model.provider, t).state === "available";
-  const railSummary = (rail: RailId, status: AgentProviderStatus): string =>
-    rail === CUSTOM_RAIL ? customSummary() : providerSummary(rail, status, text);
+  const railSummary = (rail: RailId, status: AgentProviderStatus): string => {
+    if (rail === CUSTOM_RAIL) return customSummary();
+    // The Hermes rail names the Hermes CLI even when the state came from `acp`, which runs the bots.
+    if (rail === HERMES_RAIL)
+      return providerSummary(rail, providerAvailability(props.agentStatus, props.modelOptions, rail, t), text);
+    return providerSummary(rail, status, text);
+  };
   const railHeadingSummary = (rail: RailId, status: AgentProviderStatus): string => {
     if (rail !== CUSTOM_RAIL) return providerHeadingSummary(rail, status, text);
     // OpenCode is what serves a custom endpoint, so its trouble is this tab's trouble.
@@ -448,7 +507,7 @@ export function ProviderModelPicker(props: ProviderModelPickerProps) {
   createEffect(
     () => ({ key: activeKey(), open: open(), visible: visibleKeys(), rail: railProvider() }),
     ({ key, open, visible, rail }) => {
-      if (!open || !visible.includes(rail)) setRailProvider(visible.includes(key) ? key : (visible[0] ?? CUSTOM_RAIL));
+      if (!open || !visible.includes(rail)) setRailProvider(visible.includes(key) ? key : (visible[0] ?? HERMES_RAIL));
     },
   );
 
@@ -489,7 +548,7 @@ export function ProviderModelPicker(props: ProviderModelPickerProps) {
       setNow(Date.now());
       setOpenedKeys(untrack(() => railKeys().filter(entryUsable)));
       const key = activeKey();
-      setRailProvider(visibleKeys().includes(key) ? key : (visibleKeys()[0] ?? CUSTOM_RAIL));
+      setRailProvider(visibleKeys().includes(key) ? key : (visibleKeys()[0] ?? HERMES_RAIL));
       setSearch("");
       setQueuedEffort(undefined);
     }
@@ -785,7 +844,9 @@ export function ProviderModelPicker(props: ProviderModelPickerProps) {
                   return id && id !== DEFAULT_PROVIDER_ACCOUNT_ID ? id : null;
                 };
                 const status = () => entryStatus(key);
-                const models = createMemo(() => pickerModels(entryModelOptions(key), props.customProviders));
+                const models = createMemo(() =>
+                  pickerModels(entryModelOptions(key), props.customProviders, hermesAgentName(key)),
+                );
                 const [showOlder, setShowOlder] = createSignal(false);
                 const olderExpanded = () => (showOlder() ? "true" : "false");
                 // An endpoint and a custom agent can both list `goose/default`: match the provider too.
@@ -815,9 +876,11 @@ export function ProviderModelPicker(props: ProviderModelPickerProps) {
                 const folds = () => !searching() && older().length > 0 && main().length > 0;
                 const groups = createMemo(() => groupPickerModels(folds() ? main() : models(), search()));
                 const olderGroups = createMemo(() => (folds() && showOlder() ? groupPickerModels(older(), "") : []));
-                // OpenCode or Pi and Custom share one wire id; the tab whose list holds it owns it.
+                // OpenCode or Pi and Custom share one wire id; the tab whose list holds it owns it. A
+                // Hermes bot's entry owns its selection the same way: the wire provider is `acp`,
+                // and the agent that lists the model is the entry that draws it.
                 const ownsSelection = () =>
-                  provider === CUSTOM_RAIL
+                  provider === CUSTOM_RAIL || provider === HERMES_RAIL || agentIdOfKey(key) !== null
                     ? selected()?.provider === props.provider
                     : provider === props.provider &&
                       accountId() === currentAccount() &&

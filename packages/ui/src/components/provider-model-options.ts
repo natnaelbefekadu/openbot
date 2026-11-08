@@ -81,6 +81,25 @@ function groupLabel(service: string): string {
 }
 
 /**
+ * The heading of the models Hermes serves through the local proxy that Hermes itself runs on. They
+ * are the models a bot is meant to choose from, so they sit above the rest of the catalogue, whose
+ * ids name a provider Hermes is also signed in to.
+ */
+const HERMES_PROXY_SERVICE = "Hermes proxy";
+/** The provider prefix of a model that the local Hermes proxy serves (`custom:hermesproxy:<model>`). */
+const HERMES_PROXY_PREFIX = "custom:hermesproxy:";
+
+/**
+ * Whether a custom agent runs Hermes' own CLI. Its models are Hermes' catalogue, so a bot on that
+ * agent belongs under the Hermes mark, not on a Custom tab (#fork).
+ */
+export function isHermesCustomAgent(agent: { command: string; resolvedCommand: string | null }): boolean {
+  const binary = (agent.resolvedCommand ?? agent.command).split("/").pop() ?? "";
+  const name = binary.toLowerCase().replace(/\.(?:exe|js|py|cjs|mjs)$/u, "");
+  return name === "hermes" || name.startsWith("hermes-");
+}
+
+/**
  * The lab of an OpenRouter model: its id starts `<lab>/`. Most names start `<Lab>: `, which gives the
  * heading for the lab's other models too.
  */
@@ -108,6 +127,8 @@ function modelTier(model: PickerModel): 0 | 1 {
 export function pickerModels(
   options: ClientAgentModelOption[],
   endpoints: readonly CustomProviderSummary[] = [],
+  /** A custom agent whose entry already names it: its models group by the provider inside Hermes. */
+  servicePrefix?: string,
 ): PickerModel[] {
   const { t } = currentText();
   const byId = new Map(options.map((model) => [model.id, model]));
@@ -131,7 +152,7 @@ export function pickerModels(
       .map((endpoint) => [endpoint.id, endpoint.name]),
   );
   // A model of a provider that this build does not know has no tab here; the picker shows it alone.
-  return options
+  const built = options
     .filter((model) => !variantIds.has(model.id))
     .flatMap((model) => {
       if (!isKnownAgentProvider(model.provider)) return [];
@@ -155,13 +176,15 @@ export function pickerModels(
       let service = separator < 0 ? "" : model.name.slice(0, separator);
       let name = separator < 0 ? model.name : model.name.slice(separator + 1);
       // A custom agent can serve several providers. Its id holds them as `<agent>/<provider>/<model>`
-      // even when its display name does not, so the provider segment of the id is the group.
+      // even when its display name does not, so the provider segment of the id is the group. On an
+      // entry that already names the agent, the group is the provider alone.
       if (model.provider === "acp") {
         const idSeparator = model.id.indexOf("/");
         const innerId = idSeparator < 0 ? "" : model.id.slice(idSeparator + 1);
         const providerEnd = innerId.indexOf("/");
         const provider = providerEnd < 0 ? "" : innerId.slice(0, providerEnd);
-        if (provider) service = `${service}/${provider}`;
+        const agent = servicePrefix && service === servicePrefix ? "" : service;
+        service = [agent, provider].filter(Boolean).join("/");
         const inner = name.indexOf("/");
         if (inner >= 0 && (!provider || name.slice(0, inner) === provider)) name = name.slice(inner + 1);
       }
@@ -177,13 +200,15 @@ export function pickerModels(
         service = labNames.get(lab) ?? providerLabel(lab);
         if (name.startsWith(`${service}: `)) name = name.slice(service.length + 2);
       }
-      // Hermes lists the models of each provider it is signed in to, as `<provider> · <model>`.
+      // Hermes lists the models of each provider it is signed in to, as `<provider> · <model>`. The
+      // local proxy serves its own models bare, so they take one heading of their own.
       if (model.provider === "hermes") {
         const provider = name.indexOf(" · ");
         if (provider > 0) {
           service = name.slice(0, provider);
           name = name.slice(provider + 3);
         }
+        if (model.id.startsWith(HERMES_PROXY_PREFIX)) service = HERMES_PROXY_SERVICE;
       }
       name = name.replace(/^[\s:–—-]+/, "") || model.id;
       return {
@@ -201,6 +226,11 @@ export function pickerModels(
         ...(model.listing ? { listing: model.listing } : {}),
       };
     });
+  // The proxy's models are the ones a bot here is meant to run on, so they head the list.
+  return [
+    ...built.filter((model) => model.service === HERMES_PROXY_SERVICE),
+    ...built.filter((model) => model.service !== HERMES_PROXY_SERVICE),
+  ];
 }
 
 /** One group per service, ordered by best tier; tier orders, badge carries pricing. */

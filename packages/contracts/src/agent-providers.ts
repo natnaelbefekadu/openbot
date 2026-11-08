@@ -686,12 +686,14 @@ export function agentProviderCliName(provider: AgentProviderId): string {
 /**
  * Picker and onboarding order, which is not `AGENT_PROVIDERS` order. `acp` is not in it: a custom
  * agent is the user's own command, listed in the picker's Custom tab and never offered as a default.
+ *
+ * **This fork is a front end for Hermes alone.** A bot's brain is a Hermes profile run by
+ * `hermes acp`, so the mark a bot shows and the models it offers are Hermes': every other provider
+ * is a CLI this fork never wires, and listing one is a card that can only fail. `AGENT_PROVIDERS`
+ * keeps the whole table, because drivers, sockets and stored ids still resolve through it; only the
+ * surfaces that offer a choice are narrowed. To take an upstream provider back, add its id here.
  */
-export const PICKER_PROVIDERS: readonly AgentProviderId[] = AGENT_PROVIDER_DESCRIPTORS.filter(
-  (descriptor) => descriptor.id !== "acp",
-)
-  .sort((left, right) => left.pickerOrder - right.pickerOrder)
-  .map((descriptor) => descriptor.id);
+export const PICKER_PROVIDERS: readonly AgentProviderId[] = ["hermes"];
 
 /**
  * The providers whose CLI OpenBot downloads and pins itself, as a literal tuple rather than a

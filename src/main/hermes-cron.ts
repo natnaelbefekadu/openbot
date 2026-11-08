@@ -21,6 +21,9 @@ import { type HermesProfileRef, hermesProfileFor } from "./hermes-skills";
  * change the user makes in this panel and one they make in Hermes can never disagree silently.
  */
 
+/** Where a job created from this panel delivers: the bot's own Bot Chat, never an external chat. */
+const DELIVERY = "bot-chat";
+
 interface HermesJob {
   id?: unknown;
   name?: unknown;
@@ -146,7 +149,18 @@ export class HermesCron {
   async create(reference: HermesProfileRef, input: CreateRoutineInput): Promise<Routine> {
     const expression = expressionOf(input.schedule);
     const before = new Set(this.#jobs(reference).map((job) => str(job.id)));
-    await this.#run(reference, ["cron", "create", expression, input.instruction, "--name", input.name]);
+    // `origin` is the CLI's default and has no meaning for a job started from this panel, so name
+    // the bot's own Bot Chat: the output lands where the user reads, not on an external channel.
+    await this.#run(reference, [
+      "cron",
+      "create",
+      expression,
+      input.instruction,
+      "--name",
+      input.name,
+      "--deliver",
+      DELIVERY,
+    ]);
     const created = this.#jobs(reference).find((job) => !before.has(str(job.id)));
     if (!created) throw new Error("Hermes reported no new job.");
     if (!input.active) await this.#run(reference, ["cron", "pause", str(created.id) ?? ""]);

@@ -10,6 +10,11 @@ export interface HermesFileReadInput {
 export interface HermesFileWriteInput {
   readonly path: string;
   readonly text: string;
+  /**
+   * The `modifiedAt` the panel loaded. The save is refused when the file changed since: the agent
+   * writes to these files during its turns, and overwriting its work silently loses it.
+   */
+  readonly modifiedAt?: string;
 }
 
 export interface HermesFileContent {

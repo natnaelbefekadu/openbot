@@ -310,6 +310,7 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
         state.memories.open = false;
         state.routines.open = false;
         state.files.open = false;
+        state.fileEditor.open = false;
         state.instructions.open = false;
         state.skills.open = false;
         state.skills.reopenAfterMarketplace = false;
@@ -458,13 +459,7 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
       width={panelWidth()}
       onResize={setPanelWidth}
       onResizeEnd={saveSettingsPanelWidth}
-      detailOpen={
-        draft.routines.open ||
-        draft.files.open ||
-        draft.memories.open ||
-        draft.instructions.open ||
-        draft.fileEditor.open
-      }
+      detailOpen={draft.routines.open || draft.files.open || draft.memories.open || draft.instructions.open}
       links={
         <>
           <Show when={sessionSettings()}>

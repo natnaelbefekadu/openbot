@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 import shutil
 import subprocess
 import sys
@@ -24,10 +26,20 @@ DEFAULT_HOME = Path.home() / ".hermes"
 SKIP_DIRS = {".archive", "__pycache__"}
 
 
+PROFILE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def default_home():
+    configured = os.environ.get("HERMES_HOME", "").strip()
+    return Path(configured) if configured else DEFAULT_HOME
+
+
 def home_for(profile):
     if not profile or profile == "default":
-        return DEFAULT_HOME
-    return DEFAULT_HOME / "profiles" / profile
+        return default_home()
+    if not PROFILE_NAME.match(profile) or profile in (".", ".."):
+        fail("invalid profile name %r" % profile)
+    return default_home() / "profiles" / profile
 
 
 def run(args, profile, timeout=180):
@@ -161,7 +173,9 @@ def read_jobs(home):
     if not path.is_file():
         return []
     data = json.loads(path.read_text())
-    return data.get("jobs", data if isinstance(data, list) else [])
+    if isinstance(data, list):
+        return data
+    return (data.get("jobs") if isinstance(data, dict) else None) or []
 
 
 def cmd_cron(args, profile):
@@ -178,7 +192,10 @@ def cmd_cron(args, profile):
                          "schedule": job.get("schedule"), "prompt": (job.get("prompt") or "")[:160],
                          "deliver": job.get("deliver") or job.get("delivery") or job.get("deliver_to"),
                          "last_run": job.get("last_run") or job.get("last_run_at"),
+                         "next_run": job.get("next_run") or job.get("next_run_at"),
                          "last_status": job.get("last_status"),
+                         "state": job.get("state"), "last_error": job.get("last_error"),
+                         "paused_at": job.get("paused_at"), "repeat": job.get("repeat"),
                          "script": job.get("script"), "no_agent": job.get("no_agent"),
                          "skills": job.get("skills") or job.get("skill")})
         return ok(count=len(rows), jobs=rows, profile=profile or "default")
@@ -254,12 +271,19 @@ def build_parser():
 
 def main():
     args = build_parser().parse_args()
-    if args.group == "skills":
-        cmd_skills(args, args.profile)
-    elif args.group == "cron":
-        cmd_cron(args, args.profile)
-    else:
-        cmd_models(args, args.profile)
+    try:
+        if args.group == "skills":
+            cmd_skills(args, args.profile)
+        elif args.group == "cron":
+            cmd_cron(args, args.profile)
+        else:
+            cmd_models(args, args.profile)
+    except FileNotFoundError:
+        fail("the hermes command was not found on PATH")
+    except subprocess.TimeoutExpired:
+        fail("the hermes command timed out")
+    except Exception as error:  # noqa: BLE001 - one JSON contract for every failure
+        fail(str(error)[:400])
 
 
 if __name__ == "__main__":

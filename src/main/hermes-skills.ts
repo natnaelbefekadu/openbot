@@ -127,11 +127,9 @@ export class HermesSkills {
   }
 
   async #run(reference: HermesProfileRef, args: string[]): Promise<void> {
-    const command =
-      reference.profile === "default"
-        ? [this.#hermesCommand, ...args]
-        : [this.#hermesCommand, "-p", reference.profile, ...args];
-    const [executable, ...rest] = command;
+    // `-p` takes a profile name, and the default home's folder is `.hermes`, which it rejects.
+    // The pinned `HERMES_HOME` below is what selects the profile, as it does for the agent itself.
+    const [executable, ...rest] = [this.#hermesCommand, ...args];
     if (!executable) throw new Error("No hermes command configured.");
     await new Promise<void>((resolve, reject) => {
       execFile(

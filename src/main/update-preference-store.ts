@@ -7,7 +7,7 @@ import { readPreferenceFile, writePreferenceFile } from "./preference-file";
 /** The file name under the user data folder. */
 export const UPDATE_PREFERENCE_FILE = "openbot-update-preference-v1.json";
 
-const DEFAULT_PREFERENCE: UpdatePreference = { autoDownload: true, allowRemoteUpdates: true, autoInstall: false };
+const DEFAULT_PREFERENCE: UpdatePreference = { autoDownload: false, allowRemoteUpdates: false, autoInstall: false };
 
 // `allowRemoteUpdates` and `autoInstall` came later in the same version 1 file. A file without them
 // is one written before remote updates existed, and an older app that reads a newer file ignores them.

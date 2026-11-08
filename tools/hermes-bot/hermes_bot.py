@@ -25,6 +25,7 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import NoReturn
 
 HERMES = shutil.which("hermes") or str(Path.home() / ".local/bin/hermes")
 HERMES_HOME = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
@@ -32,7 +33,7 @@ PROFILE_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,30}$")
 SHARED_SKILL_DIRS = [str(Path.home() / ".hermeslink" / "hermes-skills"), str(HERMES_HOME / "skills")]
 
 
-def fail(message, code=1):
+def fail(message, code=1) -> "NoReturn":
     print(json.dumps({"ok": False, "error": message}))
     sys.exit(code)
 
@@ -53,8 +54,14 @@ def profile_home(name):
     return HERMES_HOME / "profiles" / name
 
 
+def valid_name(name):
+    if name == "default" or not PROFILE_NAME.match(name):
+        fail("a bot name is lowercase letters, digits and hyphens, up to 31 characters, and not 'default'")
+
+
 def exists(name):
-    return (profile_home(name) / "config.yaml").is_file()
+    """A folder that is there is a profile, even if a half-finished create left no config yet."""
+    return profile_home(name).is_dir()
 
 
 def skill_count(name):
@@ -64,10 +71,13 @@ def skill_count(name):
 
 
 def read_json(path, default):
+    if not path.is_file():
+        return default
     try:
         return json.loads(path.read_text())
-    except Exception:
-        return default
+    except ValueError:
+        # Present but unparseable: rewriting it would drop every other setting it holds.
+        fail(f"{path} is not valid JSON; refusing to rewrite it")
 
 
 def write_json(path, value):
@@ -93,12 +103,16 @@ def ensure_skill_bank(name, steps):
     steps.append({"step": "shared skill bank", "status": "done", "detail": f"{count} skills visible"})
 
 
-# Keys that belong to the host or to one bot's identity, never copied into a new profile: a shared
-# bot token is the duplicate_credential bug, and a shared API server port is a bind conflict.
-HOST_OR_IDENTITY_KEY = re.compile(
-    r"(TELEGRAM|DISCORD|SLACK|SIGNAL|WHATSAPP|MATRIX|BOT_TOKEN|ALLOWED_USERS|CHAT_ID|OWNER_ID"
-    r"|HOME_CHAT|^API_SERVER_|^HERMES_DASHBOARD_|^CAMOFOX_URL)",
-    re.IGNORECASE,
+# A bot gets the credentials it needs to think and to reach the web, and nothing that raises its
+# privilege or reaches personal accounts. This is an allowlist on purpose: `SUDO_PASSWORD` and a
+# broker key were copied into a bot once, and a denylist is what let them through.
+ALLOWED_CREDENTIAL = re.compile(
+    r"^("
+    r"HERMES_PROXY_API_KEY|OPENROUTER_API_KEY|OPENCODE_GO_API_KEY|COMMAND_CODE_API_KEY"
+    r"|HINDSIGHT_API_LLM_API_KEY|STT_OPENAI_BASE_URL|VOICE_TOOLS_OPENAI_KEY|TINYFISH_API_KEY"
+    r"|SEARXNG_URL|FIRECRAWL_API_URL|FIRECRAWL_API_KEY|BRAVE_API_KEY|EXA_API_KEY"
+    r"|DEEPSEEK_API_KEY|OPENAI_API_KEY|ANTHROPIC_API_KEY|GEMINI_API_KEY"
+    r")$"
 )
 
 
@@ -119,7 +133,7 @@ def ensure_env(name, steps):
     copied = []
     for line in source.read_text().splitlines():
         match = re.match(r"^([A-Z_0-9]+)=", line)
-        if not match or match.group(1) in have or HOST_OR_IDENTITY_KEY.search(match.group(1)):
+        if not match or match.group(1) in have or not ALLOWED_CREDENTIAL.match(match.group(1)):
             continue
         copied.append(line)
     if not copied:
@@ -127,6 +141,8 @@ def ensure_env(name, steps):
         return
     body = existing if existing.endswith("\n") or not existing else existing + "\n"
     target.write_text(body + "\n".join(copied) + "\n")
+    # A credentials file is readable by its owner only, as every other profile's is.
+    os.chmod(target, 0o600)
     names = [line.split("=", 1)[0] for line in copied]
     steps.append({"step": "model credentials", "status": "done", "detail": f"{len(names)} keys: {', '.join(sorted(names)[:6])}"})
 
@@ -176,8 +192,7 @@ def copy_soul(name, steps, inherit):
 
 def cmd_create(args):
     name = args.name
-    if not PROFILE_NAME.match(name):
-        fail("a bot name is lowercase letters, digits and hyphens, up to 31 characters")
+    valid_name(name)
     steps = []
     if exists(name):
         steps.append({"step": "profile", "status": "done", "detail": "already exists"})
@@ -191,7 +206,11 @@ def cmd_create(args):
         if run(["profile", "describe", name, "--text", args.description]).returncode != 0:
             steps.append({"step": "description", "status": "failed", "detail": args.description[:80]})
     if args.title:
-        run(["profile", "rename", name, args.title])
+        # `profile rename` renames the folder for a named profile, which would move the whole bot out
+        # from under every step below, so the display name is reported instead of applied.
+        steps.append(
+            {"step": "title", "status": "skipped", "detail": f"a title would rename the profile folder; kept the id {name}"}
+        )
 
     ensure_skill_bank(name, steps)
     ensure_env(name, steps)
@@ -218,6 +237,7 @@ def cmd_create(args):
 
 def cmd_verify(args):
     name = args.name
+    valid_name(name)
     if not exists(name):
         fail(f"no profile named {name}")
     home = profile_home(name)
@@ -229,6 +249,9 @@ def cmd_verify(args):
     checks.append({"check": "hindsight tag", "ok": f"bot:{name}" in tag, "detail": tag})
     soul = home / "SOUL.md"
     checks.append({"check": "soul", "ok": soul.is_file() and soul.stat().st_size > 0, "detail": soul.stat().st_size if soul.is_file() else 0})
+    env_file = home / ".env"
+    env_keys = re.findall(r"^([A-Z_0-9]+)=", env_file.read_text(), re.MULTILINE) if env_file.is_file() else []
+    checks.append({"check": "model credentials", "ok": bool(env_keys), "detail": len(env_keys)})
     described = clean(run(["profile", "describe", name]).stdout)
     has_description = bool(described) and "no description set" not in described.lower()
     checks.append({"check": "description", "ok": has_description, "detail": described[:80]})
@@ -247,18 +270,28 @@ def cmd_list(_args):
 
 def cmd_delete(args):
     name = args.name
+    valid_name(name)
     if not exists(name):
         fail(f"no profile named {name}")
     if not args.yes:
         fail("refusing to delete without --yes: a bot profile carries its own history")
-    archive = HERMES_HOME / "profiles-disabled" / f"{name}-{datetime.now().strftime('%Y%m%d-%H%M')}"
+    archive = HERMES_HOME / "profiles-disabled" / f"{name}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     archive.parent.mkdir(parents=True, exist_ok=True)
+    if archive.exists():
+        fail(f"{archive} already exists; not nesting one profile inside another")
     shutil.move(str(profile_home(name)), str(archive))
     ok(name=name, archived=str(archive), deleted=not exists(name))
 
 
+class JsonArgumentParser(argparse.ArgumentParser):
+    """A usage error is JSON too, so a caller never gets empty stdout and exit 2."""
+
+    def error(self, message) -> NoReturn:
+        fail("usage: %s" % message)
+
+
 def build_parser():
-    parser = argparse.ArgumentParser(prog="hermes-bot")
+    parser = JsonArgumentParser(prog="hermes-bot")
     sub = parser.add_subparsers(dest="action", required=True)
     create = sub.add_parser("create")
     create.add_argument("name")

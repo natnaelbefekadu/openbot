@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 HERMES = shutil.which("hermes") or str(Path.home() / ".local/bin/hermes")
 DEFAULT_HOME = Path.home() / ".hermes"
@@ -38,6 +39,7 @@ def default_home():
 def home_for(profile):
     if not profile or profile == "default":
         return default_home()
+    profile = profile.lower()
     if not PROFILE_NAME.match(profile) or profile in (".", ".."):
         fail("invalid profile name %r" % profile)
     return default_home() / "profiles" / profile
@@ -50,7 +52,7 @@ def run(args, profile, timeout=180):
     return subprocess.run(cmd + args, capture_output=True, text=True, timeout=timeout)
 
 
-def fail(message):
+def fail(message, code=1) -> "NoReturn":
     print(json.dumps({"ok": False, "error": message}))
     sys.exit(1)
 
@@ -185,8 +187,15 @@ def ledger():
     profile. That is exactly the question a cron owner has to answer, so it reads them all.
     """
     rows = []
+    broken = []
     for profile, home in profile_homes():
-        for job in read_jobs(home):
+        try:
+            jobs = read_jobs(home)
+        except (OSError, ValueError) as error:
+            # One unreadable store must not take the whole ledger down: report it and keep going.
+            broken.append({"profile": profile, "error": str(error)[:200]})
+            continue
+        for job in jobs:
             rows.append(
                 {
                     "profile": profile,
@@ -200,13 +209,16 @@ def ledger():
                     "deliver": job.get("deliver"),
                 }
             )
-    failing = [row for row in rows if row["last_status"] in ("failed", "error")]
+    failing = [
+        row for row in rows if row["last_status"] in ("failed", "error") or row.get("last_error")
+    ]
     return {
         "count": len(rows),
         "enabled": sum(1 for row in rows if row["enabled"]),
         "profiles": len({row["profile"] for row in rows}),
+        "unreadable": broken,
         "failing": failing,
-        "jobs": sorted(rows, key=lambda row: (row["next_run"] or "")),
+        "jobs": sorted(rows, key=lambda row: str(row["next_run"] or "")),
     }
 
 
@@ -269,7 +281,8 @@ def cmd_cron(args, profile):
         created = [j for j in after if j.get("id") not in before]
         if not created:
             return fail("create reported success but no new job is on disk")
-        return ok(created=created, stdout=proc.stdout.strip()[:300])
+        # `job` is answered for every other action; create answers it too so a caller has one shape.
+        return ok(created=created, job=created[0], stdout=proc.stdout.strip()[:300])
 
     if args.action in ("pause", "resume", "run", "cancel", "remove"):
         proc = run(["cron", args.action, args.job_id], profile)
@@ -293,7 +306,7 @@ def cmd_models(args, profile):
 class JsonArgumentParser(argparse.ArgumentParser):
     """Every failure prints one JSON object, so a caller never gets empty stdout and exit 2."""
 
-    def error(self, message):
+    def error(self, message) -> "NoReturn":
         fail("usage: %s" % message)
 
 

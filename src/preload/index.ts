@@ -35,6 +35,7 @@ import {
   decodeClaudeUserSetupSetting,
   decodeCompanySignInScimToken,
   decodeCompanySignInSettings,
+  decodeHermesFileContent,
   decodeHermesImportPreview,
   decodeHermesImportResult,
   decodeHostAgentMemoryLimit,
@@ -1248,6 +1249,10 @@ const openbotApi: OpenBotDesktopApi = {
     getAgentAccess: decodeAgentAccessSnapshot,
     setAgentAccess: decodeAgentAccessSnapshot,
     getAuditLog: decodeServerAuditLog,
+  }),
+  hermesFiles: bridgeGroup(IPC_ENDPOINTS.hermesFiles, {
+    read: decodeHermesFileContent,
+    write: decodeHermesFileContent,
   }),
   agentImport: bridgeGroup(IPC_ENDPOINTS.agentImport, {
     choose: decodeAgentImportPreview,

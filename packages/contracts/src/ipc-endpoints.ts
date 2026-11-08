@@ -10,6 +10,7 @@ import type {
   ResetAgentSessionSettingInput,
   SetAgentSessionSettingInput,
 } from "./ipc-agent-session-settings";
+import type { HermesFileContent, HermesFileReadInput, HermesFileWriteInput } from "./ipc-hermes-files";
 import type { ServerAuditLog } from "./ipc-server-audit";
 // The one channel list. Each endpoint holds its wire value, the group it belongs to, and whether it
 // is a request the renderer invokes or an event the main process sends. That is what lets a
@@ -2097,6 +2098,12 @@ export const IPC_ENDPOINTS = {
     /** Removes the old versions no instance uses now and the downloads it named, and answers what is left. */
     removeRemovableRuntimes: request<undefined, RemovableRuntimes>()("storage:remove-removable-runtimes"),
   },
+  // A text file inside a folder the agent already reaches. The panel reads it, the user edits it,
+  // and a save keeps a `.bak` beside the file. Nothing outside the agent's own folders is reachable.
+  hermesFiles: {
+    read: request<HermesFileReadInput, HermesFileContent>()("hermes-files:read"),
+    write: request<HermesFileWriteInput, HermesFileContent>()("hermes-files:write"),
+  },
   // Bound against the agent import service, which holds the staged archives. A remote server is
   // reached with `agent-import-v1`; main still opens the file dialog and sends the file.
   agentImport: {
@@ -2264,6 +2271,7 @@ export const IPC_GROUP_PATHS = {
   agentAdmin: "agent",
   mcpServers: "agent",
   storage: "storage",
+  hermesFiles: "hermesFiles",
   agentImport: "agentImport",
   instanceTransfer: "instanceTransfer",
   plugins: "plugins",

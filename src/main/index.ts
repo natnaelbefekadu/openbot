@@ -88,6 +88,7 @@ import { registerIpcGroups } from "./ipc/define-ipc-group";
 import { dynamicIslandIpcHandlers } from "./ipc/dynamic-island-handlers";
 import { eventsIpcHandlers } from "./ipc/events-handlers";
 import { githubConnectorIpcHandlers } from "./ipc/github-connector-handlers";
+import { hermesFileIpcHandlers } from "./ipc/hermes-file-handlers";
 import { hostAdminIpcHandlers } from "./ipc/host-admin-handlers";
 import { hostedServerIpcHandlers } from "./ipc/hosted-server-handlers";
 import { hostedSiteIpcHandlers } from "./ipc/hosted-site-handlers";
@@ -849,6 +850,7 @@ function registerIpcHandlers({
       forwardLiveEvent: forwardVoiceLiveEvent,
     }),
     ...accountIpcHandlers({ centralAuth, host }),
+    ...hermesFileIpcHandlers(),
     ...skillIpcHandlers({
       skills,
       getMainWindow: getDialogParent,
